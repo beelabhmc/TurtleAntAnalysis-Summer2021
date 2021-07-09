@@ -109,4 +109,8 @@ ggplot(turn_choices_by_ant, aes(x=left_turns,y=right_turns)) +
   xlim(0,max_turns) + ylim(0,max_turns)
 ```
 
+This shows that their propensity to turn left vs right is quite balanced. How often do they U-turn at a junction? Approximately 9.2% of the time.
 
+```{r}
+table(turn_choices$Turn.Type)/sum(table(turn_choices$Turn.Type))
+```
