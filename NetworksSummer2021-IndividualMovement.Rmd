@@ -1,0 +1,112 @@
+---
+title: "Individual Movement Analysis"
+author: "Matina Donaldson-Matasci"
+date: "7/8/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(ggplot2)
+theme_set(theme_minimal())
+require(dplyr)
+require(tidyr)
+```
+
+## Hypotheses / Questions
+
+We would like to discover the rules by which individual turtle ants move through a branching structure.
+
+1. Are they more likely to take left or right turns?
+1. Are they more likely to take a wider, less angled turn or a narrower, more angled turn?
+1. Are they more likely to move inwards towards the trunk, or outwards towards the tips?
+
+## Data description
+
+We created a branching structure for the ants to navigate, consisting of a series of many Y-junctions. Each Y-junction has a thicker, main branch leading back to the trunk, and two alternate choices, one of which has a small angle of deviation (10 degrees) and the same diameter as the main branch, and the other of which has a large angle of deviation (70 degrees) and a smaller diameter.
+
+First, given a table of the junction labels and their connections to one another, we would like to construct a table of the different types of turns an ant can take. 
+
+Here is the table of junction entry/exit points, which we will call branches. We are only interested in the columns "Junction" (the junction label), "Direction" (whether it is the main, left or right branch), "Width" (the diameter of the branch) and "Leads.to.Node" (which node the branch leads to). We check to see that it has the right shape: we expect 31 junctions, each of which has a main, left and right branch. So there are 93 rows, one row for each branch of each junction. There are 4 different branch diameters. Most junctions have two different branch widths, but there is one junction that has only 1. 
+
+```{r}
+branches <- read.csv("data/NetworksSummer2021-JunctionReference.csv",
+                     colClasses=c("Junction"="character","Direction"="factor",
+                                  "Width"="numeric", "Leads.to.Node"="character"),
+                     na.strings="")
+branches <- branches %>%
+  select(Junction, Direction, Width, Leads.to.Node)
+head(branches)
+branches %>% summarize(num_junctions=n_distinct(Junction))
+branches %>% group_by(Junction) %>% summarize(num_branches=n())
+branches %>% group_by(Width) %>% summarize(num_branches=n())
+branches %>% group_by(Junction) %>% summarize(num_widths=n_distinct(Width))
+```
+
+Now we want to create a table of turns. This consists of a sequence of two things: entering a junction from one branch, and exiting it along (potentially) another branch That is, for each junction, we want all combinations of branches. To do this, we use a full join, based on the junction. For each turn, we then specify whether it is a left turn or a right turn, based on the entry and exit direction.
+
+```{r}
+turns <- full_join(branches,branches,by=c("Junction"),suffix=c(".From",".To")) %>%
+  rename(Node.From=Leads.to.Node.From, Node.To=Leads.to.Node.To)
+turns <- turns %>%
+  mutate(Turn.Type = case_when(
+    Direction.From=="main" & Direction.To=="left" ~ "L",
+    Direction.From=="main" & Direction.To=="right" ~ "R",
+    Direction.From=="left" & Direction.To=="right" ~ "L",
+    Direction.From=="left" & Direction.To=="main" ~ "R",
+    Direction.From=="right" & Direction.To=="main" ~ "L",
+    Direction.From=="right" & Direction.To=="left" ~ "R",
+    TRUE ~ "U"
+  ))
+```
+
+Finally, we want to join our data on individual movement between junctions with this data describing the types of turns. To do this, first we need to fill in some missing information: where the ant came from, and where it's going. We begin with information about the sequence of junctions visited ("Junction"). This is typically sufficient to reconstruct the whole trajectory: the ant came from the previous junction in the list, and went towards to next junction in the list. However, if the ant made a U-turn along a branch, we have an exception: the ant actually never reached the node it was going towards when it first exited the junction, which is also the node it was traveling from when it reenters the same junction again. In this case, we recorded the junction it was traveling towards in the column ("Exited Toward").
+
+```{r}
+movement <- read.csv("data/NetworksSummer2021-IndividualMovement.csv",
+                     colClasses="character", na.strings="")
+movement <- movement %>%
+  select(Date,Colony,Ant.ID,Time,Junction,Entered.From,Exited.Toward) %>%
+  group_by(Colony,Ant.ID) %>%
+  mutate(Node.From=lag(Junction),Node.To=lead(Junction)) %>%
+  mutate(Node.From=replace_na(Node.From,-1)) %>% 
+  mutate(Node.To=if_else(is.na(Exited.Toward),Node.To,Exited.Toward)) %>%
+  mutate(Node.To=replace_na(Node.To,-1)) %>% 
+  mutate(Entered.From=lag(Exited.Toward))  %>%
+  mutate(Node.From=if_else(is.na(Entered.From),Node.From,Entered.From))
+```
+
+Now, finally, we should be able to join the two tables together to generate a list of all the turns made by each ant.
+
+```{r}
+#junctions <- summarize(branches,Junction)
+turn_choices <- left_join(movement,turns,by=c("Junction","Node.From","Node.To")) %>%
+  filter(Junction %in% unique(branches$Junction))
+write.csv(turn_choices,file="data/NetworksSummer2021-TurnChoices.csv")
+```
+
+## Data analysis
+
+### Are they more likely to take left or right turns?
+
+Let's make a plot showing each ant's left and right turns. If there is no bias, we expect the regression line to have a slope of 1 (we want to force it to have an intercept of 0). This is what we see.
+
+```{r}
+turn_choices_by_ant <- turn_choices %>% 
+  group_by(Colony,Ant.ID) %>% 
+  summarize(num_turns=n(), 
+            left_turns=sum(Turn.Type=="L",na.rm=T), 
+            right_turns=sum(Turn.Type=="R",na.rm=T), 
+            right_proportion=right_turns/(right_turns+left_turns)) %>%
+  ungroup()
+
+model <- lm(right_turns ~ left_turns + 0, data=turn_choices_by_ant)
+
+max_turns <- max(turn_choices_by_ant$left_turns,turn_choices_by_ant$right_turns)
+ggplot(turn_choices_by_ant, aes(x=left_turns,y=right_turns)) + 
+  geom_point(aes(color=Colony)) + geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
+  geom_abline(slope=1,intercept=0,lty=2) + xlab("Number of left turns") + ylab("Number of right turns") + 
+  xlim(0,max_turns) + ylim(0,max_turns)
+```
+
+
