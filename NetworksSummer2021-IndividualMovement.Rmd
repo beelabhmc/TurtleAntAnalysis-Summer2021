@@ -1,7 +1,7 @@
 ---
 title: "Individual Movement Analysis"
 author: "Matina Donaldson-Matasci"
-date: "7/8/2021"
+date: "7/14/2021"
 output: html_document
 ---
 
@@ -11,6 +11,7 @@ require(ggplot2)
 theme_set(theme_minimal())
 require(dplyr)
 require(tidyr)
+require(ggthemes)
 ```
 
 ## Hypotheses / Questions
@@ -20,6 +21,11 @@ We would like to discover the rules by which individual turtle ants move through
 1. Are they more likely to take left or right turns?
 1. Are they more likely to take a wider, less angled turn or a narrower, more angled turn?
 1. Are they more likely to move inwards towards the trunk, or outwards towards the tips?
+
+We also want to understand how these choices at individual junctions produce paths to specific nests.
+
+1. Which nests are they most likely to visit?
+1. Which nests do they reach most quickly?
 
 ## Data description
 
@@ -66,8 +72,12 @@ Finally, we want to join our data on individual movement between junctions with 
 movement <- read.csv("data/NetworksSummer2021-IndividualMovement.csv",
                      colClasses="character", na.strings="")
 movement <- movement %>%
-  select(Date,Colony,Ant.ID,Time,Junction,Entered.From,Exited.Toward) %>%
+  select(Date, Colony, Ant.ID, Time, Junction, 
+         Entered.From, Exited.Toward, Action..inspect.ignore.) %>%
   group_by(Colony,Ant.ID) %>%
+  mutate(Inspect=if_else(grepl("inspect",
+                               Action..inspect.ignore.),T,F)) %>%
+  mutate(Num.Inspections=cumsum(Inspect)) %>%
   mutate(Node.From=lag(Junction),Node.To=lead(Junction)) %>%
   mutate(Node.From=replace_na(Node.From,-1)) %>% 
   mutate(Node.To=if_else(is.na(Exited.Toward),Node.To,Exited.Toward)) %>%
@@ -79,38 +89,107 @@ movement <- movement %>%
 Now, finally, we should be able to join the two tables together to generate a list of all the turns made by each ant.
 
 ```{r}
-#junctions <- summarize(branches,Junction)
 turn_choices <- left_join(movement,turns,by=c("Junction","Node.From","Node.To")) %>%
   filter(Junction %in% unique(branches$Junction))
 write.csv(turn_choices,file="data/NetworksSummer2021-TurnChoices.csv")
+```
+
+Besides the turns they made at each junction, we also want to analyze which tips (ends of branches, containing food or nests) they reached. To figure this out, we look for visits to junctions with labels that are in our list of tips. For each such visit, we ask how many nodes they passed along the way since the start (a measure of path length).
+
+```{r}
+tips <- read.csv("data/NetworksSummer2021-TipReference.csv",
+                 colClasses=c("Tip"="character","Type"="factor"),
+                 na.strings="")
+
+movement <- movement %>%
+  group_by(Colony,Ant.ID) %>%
+  mutate(Num.Nodes.Passed=row_number())
+
+tip_visits <- inner_join(movement,tips,by=c("Junction"="Tip")) 
+
+write.csv(tip_visits,file="data/NetworksSummer2021-TipVisits.csv")
 ```
 
 ## Data analysis
 
 ### Are they more likely to take left or right turns?
 
-Let's make a plot showing each ant's left and right turns. If there is no bias, we expect the regression line to have a slope of 1 (we want to force it to have an intercept of 0). This is what we see.
+Let's make a plot showing each ant's left vs. right turns. We want to include only turns on the way to a nest or food, because if we include both directions any initial bias while searching might be canceled out by the ant making its way back. If there is no bias, we expect a regression line of the number of right turns on the total number of turns (left or right) to have a slope of 1/2 (we want to force it to have an intercept of 0).
 
 ```{r}
 turn_choices_by_ant <- turn_choices %>% 
-  group_by(Colony,Ant.ID) %>% 
+  group_by(Colony,Ant.ID) %>%
+  filter(Num.Inspections==0) %>%
   summarize(num_turns=n(), 
             left_turns=sum(Turn.Type=="L",na.rm=T), 
             right_turns=sum(Turn.Type=="R",na.rm=T), 
-            right_proportion=right_turns/(right_turns+left_turns)) %>%
+            total_turns=right_turns+left_turns) %>%
   ungroup()
 
-model <- lm(right_turns ~ left_turns + 0, data=turn_choices_by_ant)
-
-max_turns <- max(turn_choices_by_ant$left_turns,turn_choices_by_ant$right_turns)
-ggplot(turn_choices_by_ant, aes(x=left_turns,y=right_turns)) + 
-  geom_point(aes(color=Colony)) + geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
-  geom_abline(slope=1,intercept=0,lty=2) + xlab("Number of left turns") + ylab("Number of right turns") + 
-  xlim(0,max_turns) + ylim(0,max_turns)
+right.model <- lm(right_turns ~ total_turns + 0,
+                  data=turn_choices_by_ant)
+no.bias.model <- lm(right_turns ~ offset(0.5*total_turns)+0, 
+                    data=turn_choices_by_ant)
+summary(right.model)
+anova(right.model,no.bias.model)
 ```
 
-This shows that their propensity to turn left vs right is quite balanced. How often do they U-turn at a junction? Approximately 9.2% of the time.
+Comparing the fitted model with a model of known slope (=0.5) shows that the outgoing ants do have a significant right bias, with a 56.7% chance of turning right. Here is a plot to illustrate it:
+
+```{r}
+max_turns <- max(turn_choices_by_ant$total_turns)
+ggplot(turn_choices_by_ant, aes(x=total_turns,y=right_turns)) + 
+  geom_point(aes(color=Colony)) + 
+  geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
+  geom_abline(slope=0.5,intercept=0,lty=2) + 
+  xlab("Total number of turns") + ylab("Number of right turns") +
+  xlim(0,max_turns)
+```
+
+How often do they U-turn at a junction? Approximately 9.3% of the time.
 
 ```{r}
 table(turn_choices$Turn.Type)/sum(table(turn_choices$Turn.Type))
 ```
+
+### Which nests are they most likely to visit?
+
+Of the eight different nests, which one are the ants most likely to visit first? We filter out only visits to nests, and then take the first one for each ant. The plot shows that many ants visited nest 72 first, closely followed by 321.
+
+```{r}
+first_nest_visits <- tip_visits %>%
+  filter(Type=="nest") %>%
+  group_by(Colony,Ant.ID) %>%
+  summarize(Junction=first(Junction),Num.Nodes.Passed=first(Num.Nodes.Passed))
+
+first_nest_visits <- first_nest_visits %>%
+  mutate(Nest=factor(Junction,
+                  levels=c("321","72","1112","1221","412",
+                           "82","2112","2212")))
+ggplot(first_nest_visits, aes(x=Nest,fill=Nest)) + 
+  geom_bar() + ylim(0,14) +
+  scale_fill_tableau(palette = "Tableau 10") +
+  xlab("Nest Number") + 
+  ylab("Number of ants reaching this nest first") +
+  theme(legend.position="none")
+ggsave("images/FirstNestVisits-NumAnts.png", 
+       dpi=300, width = 5, height = 3, units = "in")
+```
+
+We also would like to know how direct their route to get there was. If they take a direct route, this will be easier to reinforce with pheromone. To figure this out, we plot the number of nodes each ant passed along the way to the first nest they visited. The shortest possible path is 6 nodes long, because that is the distance from the entry point to each tip.
+
+```{r}
+ggplot(first_nest_visits, aes(x=Nest,
+                              y=Num.Nodes.Passed)) + 
+  geom_boxplot(aes(fill=Nest)) + 
+  geom_jitter(height=0,width=0.15) +
+  scale_color_tableau(palette = "Tableau 10") +
+  scale_fill_tableau(palette = "Tableau 10") +
+  geom_abline(slope=0,intercept=6,lty=2) +
+  xlab("Nest Number") + ylab("Path length (number of nodes)")  +
+  theme(legend.position="none")
+ggsave("images/FirstNestVisits-PathLength.png", 
+       dpi=300, width = 5, height = 3, units = "in")
+```
+
+Here we see that again nest 72 has the most direct routes; in fact there are several ants that went directly there -- something that never happened for any other nest.
