@@ -12,6 +12,7 @@ theme_set(theme_minimal())
 require(dplyr)
 require(tidyr)
 require(ggthemes)
+require(grDevices)
 ```
 
 ## Hypotheses / Questions
@@ -157,6 +158,8 @@ table(turn_choices$Turn.Type)/sum(table(turn_choices$Turn.Type))
 Of the eight different nests, which one are the ants most likely to visit first? We filter out only visits to nests, and then take the first one for each ant. The plot shows that many ants visited nest 72 first, closely followed by 321.
 
 ```{r}
+
+
 first_nest_visits <- tip_visits %>%
   filter(Type=="nest") %>%
   group_by(Colony,Ant.ID) %>%
@@ -166,9 +169,12 @@ first_nest_visits <- first_nest_visits %>%
   mutate(Nest=factor(Junction,
                   levels=c("321","72","1112","1221","412",
                            "82","2112","2212")))
+nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
 ggplot(first_nest_visits, aes(x=Nest,fill=Nest)) + 
   geom_bar() + ylim(0,14) +
-  scale_fill_tableau(palette = "Tableau 10") +
+  scale_fill_manual(values=nest.palette,drop=F) +
+  scale_x_discrete(drop=F) +
+  #scale_fill_tableau(palette = "Tableau 10") +
   xlab("Nest Number") + 
   ylab("Number of ants reaching this nest first") +
   theme(legend.position="none")
@@ -183,8 +189,11 @@ ggplot(first_nest_visits, aes(x=Nest,
                               y=Num.Nodes.Passed)) + 
   geom_boxplot(aes(fill=Nest)) + 
   geom_jitter(height=0,width=0.15) +
-  scale_color_tableau(palette = "Tableau 10") +
-  scale_fill_tableau(palette = "Tableau 10") +
+  scale_fill_manual(values=nest.palette,drop=F) +
+  #scale_color_manual(values=palette.colors(n = 8, palette = "Classic Tableau")) +
+  scale_x_discrete(drop=F) +
+  #scale_color_tableau(palette = "Tableau 10") +
+  #scale_fill_tableau(palette = "Tableau 10") +
   geom_abline(slope=0,intercept=6,lty=2) +
   xlab("Nest Number") + ylab("Path length (number of nodes)")  +
   theme(legend.position="none")
