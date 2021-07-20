@@ -52,7 +52,14 @@ branches %>% group_by(Junction) %>% summarize(num_widths=n_distinct(Width))
 
 Now we want to create a table of turns. This consists of a sequence of two things: entering a junction from one branch, and exiting it along (potentially) another branch That is, for each junction, we want all combinations of branches. To do this, we use a full join, based on the junction. For each turn, we then specify whether it is a left turn or a right turn, based on the entry and exit direction.
 
+This action is then carried out with narrow and wide junction decisions as well.
+
 ```{r}
+branches <- branches %>%
+  group_by(Junction) %>%
+  mutate(Rel.Width = if_else(Width > min(Width),"wide","narrow")) %>%
+  ungroup()
+
 turns <- full_join(branches,branches,by=c("Junction"),suffix=c(".From",".To")) %>%
   rename(Node.From=Leads.to.Node.From, Node.To=Leads.to.Node.To)
 turns <- turns %>%
@@ -65,6 +72,13 @@ turns <- turns %>%
     Direction.From=="right" & Direction.To=="left" ~ "R",
     TRUE ~ "U"
   ))
+
+turns <- turns %>%
+  mutate(Turn.Width = if_else(Node.From == Node.To, NA_character_,case_when(
+    Rel.Width.From=="wide" & Rel.Width.To=="narrow" ~ "N",
+    Rel.Width.From=="wide" & Rel.Width.To=="wide" ~ "W")))
+
+turns
 ```
 
 Finally, we want to join our data on individual movement between junctions with this data describing the types of turns. To do this, first we need to fill in some missing information: where the ant came from, and where it's going. We begin with information about the sequence of junctions visited ("Junction"). This is typically sufficient to reconstruct the whole trajectory: the ant came from the previous junction in the list, and went towards to next junction in the list. However, if the ant made a U-turn along a branch, we have an exception: the ant actually never reached the node it was going towards when it first exited the junction, which is also the node it was traveling from when it reenters the same junction again. In this case, we recorded the junction it was traveling towards in the column ("Exited Toward").
@@ -202,7 +216,3 @@ ggsave("images/FirstNestVisits-PathLength.png",
 ```
 
 Here we see that again nest 72 has the most direct routes; in fact there are several ants that went directly there -- something that never happened for any other nest.
-
-### Simon's Work
-
-Test
