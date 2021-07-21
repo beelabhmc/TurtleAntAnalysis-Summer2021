@@ -148,7 +148,7 @@ summary(right.model)
 anova(right.model,no.bias.model)
 ```
 
-Comparing the fitted model with a model of known slope (=0.5) shows that the outgoing ants do have a significant right bias, with a 56.7% chance of turning right. Here is a plot to illustrate it:
+Comparing the fitted model with a model of known slope (=0.5) shows that the outgoing ants do have a slight right bias, with a 53.7% chance of turning right. Here is a plot to illustrate it:
 
 ```{r}
 max_turns <- max(turn_choices_by_ant$total_turns)
@@ -160,7 +160,7 @@ ggplot(turn_choices_by_ant, aes(x=total_turns,y=right_turns)) +
   xlim(0,max_turns)
 ```
 
-How often do they U-turn at a junction? Approximately 9.3% of the time.
+How often do they U-turn at a junction? Approximately 9.5% of the time.
 
 ```{r}
 table(turn_choices$Turn.Type)/sum(table(turn_choices$Turn.Type))
@@ -227,22 +227,22 @@ turn_choices_by_ant_width <- turn_choices %>%
   summarize(num_turns=n(), 
             narrow_turns=sum(Turn.Width=="N",na.rm=T), 
             wide_turns=sum(Turn.Width=="W",na.rm=T), 
-            total_turns=narrow_turns+wide_turns) %>%
+            total_width_turns=narrow_turns+wide_turns) %>%
   ungroup()
 
-wide.model <- lm(wide_turns ~ total_turns + 0,
+wide.model <- lm(wide_turns ~ total_width_turns + 0,
                   data=turn_choices_by_ant_width)
-no.bias.model <- lm(wide_turns ~ offset(0.5*total_turns)+0, 
+no.bias.model <- lm(wide_turns ~ offset(0.5*total_width_turns)+0, 
                     data=turn_choices_by_ant_width)
 summary(wide.model)
 anova(wide.model,no.bias.model)
 ```
 
-Comparing the fitted model with a model of known slope (=0.5) shows that outgoing ants have a significant wide bias, staying on the wide branch 55.7% of the time where width could be considered. This plot illustrates this:
+Comparing the fitted model with a model of known slope (=0.5) shows that outgoing ants have a significant wide bias, staying on the wide branch 57.9% of the time where width could be considered. This plot illustrates this:
 
 ```{r}
-max_turns <- max(turn_choices_by_ant_width$total_turns)
-ggplot(turn_choices_by_ant_width, aes(x=total_turns,y=wide_turns)) + 
+max_turns <- max(turn_choices_by_ant_width$total_width_turns)
+ggplot(turn_choices_by_ant_width, aes(x=total_width_turns,y=wide_turns)) + 
   geom_point(aes(color=Colony)) + 
   geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
   geom_abline(slope=0.5,intercept=0,lty=2) + 
