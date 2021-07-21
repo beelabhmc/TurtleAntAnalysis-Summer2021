@@ -78,7 +78,6 @@ turns <- turns %>%
     Rel.Width.From=="wide" & Rel.Width.To=="narrow" ~ "N",
     Rel.Width.From=="wide" & Rel.Width.To=="wide" ~ "W")))
 
-turns
 ```
 
 Finally, we want to join our data on individual movement between junctions with this data describing the types of turns. To do this, first we need to fill in some missing information: where the ant came from, and where it's going. We begin with information about the sequence of junctions visited ("Junction"). This is typically sufficient to reconstruct the whole trajectory: the ant came from the previous junction in the list, and went towards to next junction in the list. However, if the ant made a U-turn along a branch, we have an exception: the ant actually never reached the node it was going towards when it first exited the junction, which is also the node it was traveling from when it reenters the same junction again. In this case, we recorded the junction it was traveling towards in the column ("Exited Toward").
@@ -216,3 +215,37 @@ ggsave("images/FirstNestVisits-PathLength.png",
 ```
 
 Here we see that again nest 72 has the most direct routes; in fact there are several ants that went directly there -- something that never happened for any other nest.
+
+### Are they more likely to go on wide branches?
+
+We can also inspect whether they prefer wider branches when exploring. At some decisions the ants need to decide between wide and narrow branches, but not many, since U-turns do not count as a wide bias, and ants coming from a narrow branch have equal width in front of them.
+
+```{r}
+turn_choices_by_ant_width <- turn_choices %>% 
+  group_by(Colony,Ant.ID) %>%
+  filter(Num.Inspections==0) %>%
+  summarize(num_turns=n(), 
+            narrow_turns=sum(Turn.Width=="N",na.rm=T), 
+            wide_turns=sum(Turn.Width=="W",na.rm=T), 
+            total_turns=narrow_turns+wide_turns) %>%
+  ungroup()
+
+wide.model <- lm(wide_turns ~ total_turns + 0,
+                  data=turn_choices_by_ant_width)
+no.bias.model <- lm(wide_turns ~ offset(0.5*total_turns)+0, 
+                    data=turn_choices_by_ant_width)
+summary(wide.model)
+anova(wide.model,no.bias.model)
+```
+
+Comparing the fitted model with a model of known slope (=0.5) shows that outgoing ants have a significant wide bias, staying on the wide branch 55.7% of the time where width could be considered. This plot illustrates this:
+
+```{r}
+max_turns <- max(turn_choices_by_ant_width$total_turns)
+ggplot(turn_choices_by_ant_width, aes(x=total_turns,y=wide_turns)) + 
+  geom_point(aes(color=Colony)) + 
+  geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
+  geom_abline(slope=0.5,intercept=0,lty=2) + 
+  xlab("Total number of turns") + ylab("Number of wide turns") +
+  xlim(0,max_turns)
+```
