@@ -157,7 +157,10 @@ ggplot(turn_choices_by_ant, aes(x=total_turns,y=right_turns)) +
   geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
   geom_abline(slope=0.5,intercept=0,lty=2) + 
   xlab("Total number of turns") + ylab("Number of right turns") +
-  xlim(0,max_turns)
+  xlim(0,max_turns) +
+  theme_minimal(base_size = 25)
+ggsave("images/RightvsTotalTurns.png", 
+       dpi=300, width = 8, height = 5, units = "in")
 ```
 
 How often do they U-turn at a junction? Approximately 9.5% of the time.
@@ -193,6 +196,33 @@ ggplot(first_nest_visits, aes(x=Nest,fill=Nest)) +
   theme(legend.position="none")
 ggsave("images/FirstNestVisits-NumAnts.png", 
        dpi=300, width = 5, height = 3, units = "in")
+```
+```{r}
+first_nest_visits_POSTER <- first_nest_visits %>%
+  mutate(Poster.Nest= case_when(
+    Nest == 321 ~ "A2",
+    Nest == 72 ~ "B3",
+    Nest == 1112 ~ "C1",
+    Nest == 1221 ~ "D2",
+    Nest == 412 ~ "E1",
+    Nest == 82 ~ "F1",
+    Nest == 2112 ~ "G1",
+    Nest == 2212 ~ "H1"
+  ))
+
+nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
+ggplot(first_nest_visits_POSTER, aes(x=Poster.Nest,fill=Poster.Nest)) + 
+  geom_bar() + ylim(0,14) +
+  scale_fill_manual(values=nest.palette,drop=F) +
+  scale_x_discrete(drop=F) +
+  #scale_fill_tableau(palette = "Tableau 10") +
+  xlab("Nest Name") + 
+  ylab("First nest visits") +
+  labs(title = "Nest Discovery (Individual)") +
+  theme_minimal(base_size = 25) +
+  theme(legend.position="none")
+ggsave("images/FirstNestVisits-NumAnts-POSTER.png", 
+       dpi=300, width = 8, height = 5, units = "in")
 ```
 
 We also would like to know how direct their route to get there was. If they take a direct route, this will be easier to reinforce with pheromone. To figure this out, we plot the number of nodes each ant passed along the way to the first nest they visited. The shortest possible path is 6 nodes long, because that is the distance from the entry point to each tip.
@@ -247,5 +277,8 @@ ggplot(turn_choices_by_ant_width, aes(x=total_width_turns,y=wide_turns)) +
   geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
   geom_abline(slope=0.5,intercept=0,lty=2) + 
   xlab("Total number of turns") + ylab("Number of wide turns") +
-  xlim(0,max_turns)
+  xlim(0,max_turns) +
+  theme_minimal(base_size = 25)
+ggsave("images/WidevsTotalTurns.png", 
+       dpi=300, width = 8, height = 5, units = "in")
 ```
