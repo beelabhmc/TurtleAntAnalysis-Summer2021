@@ -11,6 +11,9 @@
 # Example code in package build process
 *-Ex.R
 
+# Knitted outputs
+*.html
+
 # Output files from R CMD build
 /*.tar.gz
 
