@@ -1,7 +1,7 @@
 ---
 title: "Individual Movement Analysis"
 author: "Matina Donaldson-Matasci"
-date: "7/14/2021"
+date: "10/11/2021"
 output: html_document
 ---
 
@@ -89,9 +89,22 @@ movement <- movement %>%
   select(Date, Colony, Ant.ID, Time, Junction, 
          Entered.From, Exited.Toward, Action..inspect.ignore.) %>%
   group_by(Colony,Ant.ID) %>%
+  # Ants come in pairs, labeled e.g. as 1A and 1B
+  # We want to be able to distinguish the first ant (A) 
+  # from the second (B) in each pair
+  separate(Ant.ID, into=c("Pair.ID","Ant.In.Pair"), 
+           sep=1, remove=F, convert=F) %>%
+  mutate(Pair.ID=as.factor(Pair.ID),
+         Ant.In.Pair=as.factor(Ant.In.Pair)) %>%
+  # Here we count up how many times an ant has inspected food
+  # or a nest so we can distinguish outgoing & returning paths
   mutate(Inspect=if_else(grepl("inspect",
                                Action..inspect.ignore.),T,F)) %>%
   mutate(Num.Inspections=cumsum(Inspect)) %>%
+  # Here we infer the direction an ant came from by 
+  # the prior junction it visited and where it went by the
+  # next junction it visited, unless that information was given
+  # in the Exited.Toward column
   mutate(Node.From=lag(Junction),Node.To=lead(Junction)) %>%
   mutate(Node.From=replace_na(Node.From,-1)) %>% 
   mutate(Node.To=if_else(is.na(Exited.Toward),Node.To,Exited.Toward)) %>%
@@ -128,12 +141,13 @@ write.csv(tip_visits,file="data/NetworksSummer2021-TipVisits.csv")
 
 ### Are they more likely to take left or right turns?
 
-Let's make a plot showing each ant's left vs. right turns. We want to include only turns on the way to a nest or food, because if we include both directions any initial bias while searching might be canceled out by the ant making its way back. If there is no bias, we expect a regression line of the number of right turns on the total number of turns (left or right) to have a slope of 1/2 (we want to force it to have an intercept of 0).
+Let's make a plot showing each ant's left vs. right turns. We want to include only turns on the way to a nest or food, because if we include both directions any initial bias while searching might be canceled out by the ant making its way back. We also want to include only the first ant in the pair, because the second ant may be influenced by the first ant's choices. If there is no bias, we expect a regression line of the number of right turns on the total number of turns (left or right) to have a slope of 1/2 (we want to force it to have an intercept of 0).
 
 ```{r}
 turn_choices_by_ant <- turn_choices %>% 
   group_by(Colony,Ant.ID) %>%
   filter(Num.Inspections==0) %>%
+  filter(Ant.In.Pair=="A") %>%
   summarize(num_turns=n(), 
             left_turns=sum(Turn.Type=="L",na.rm=T), 
             right_turns=sum(Turn.Type=="R",na.rm=T), 
@@ -148,7 +162,7 @@ summary(right.model)
 anova(right.model,no.bias.model)
 ```
 
-Comparing the fitted model with a model of known slope (=0.5) shows that the outgoing ants do have a slight right bias, with a 53.7% chance of turning right. Here is a plot to illustrate it:
+Comparing the fitted model with a model of known slope (=0.5) shows that the outgoing ants do have a slight right bias, with a 59.5% chance of turning right. Here is a plot to illustrate it:
 
 ```{r}
 max_turns <- max(turn_choices_by_ant$total_turns)
@@ -168,6 +182,24 @@ How often do they U-turn at a junction? Approximately 9.5% of the time.
 ```{r}
 table(turn_choices$Turn.Type)/sum(table(turn_choices$Turn.Type))
 ```
+
+In particular, we would like to know which way they turn at the first junction they meet. We'll again just look at the first ant in each pair, and only at their first choice when they arrive at the junction.
+
+```{r}
+first_turns <- turn_choices %>% 
+  filter(Junction=="0",Direction.From=="right",
+         Direction.To %in% c("main","left")) %>% 
+  filter(Ant.In.Pair=="A") %>% 
+  group_by(Colony,Ant.ID) %>% 
+  summarize(Turn.Type=first(Turn.Type)) %>% 
+  group_by(Turn.Type) %>% 
+  summarize(num=n())
+first_turns
+
+binom.test(first_turns$num)
+```
+
+This shows something of a left bias at that first junction: 19 out of 31 turns were to the left. This seems contrary to the general right bias and suggests that the right bias could be affected (or even produced) by branching geometry. However, the proportion of left turns is not significantly different from 50%.
 
 ### Which nests are they most likely to visit?
 
@@ -197,6 +229,9 @@ ggplot(first_nest_visits, aes(x=Nest,fill=Nest)) +
 ggsave("images/FirstNestVisits-NumAnts.png", 
        dpi=300, width = 5, height = 3, units = "in")
 ```
+
+Here is another version of the same graph with different labeling for the poster.
+
 ```{r}
 first_nest_visits_POSTER <- first_nest_visits %>%
   mutate(Poster.Nest= case_when(
@@ -254,6 +289,7 @@ We can also inspect whether they prefer wider branches when exploring. At some d
 turn_choices_by_ant_width <- turn_choices %>% 
   group_by(Colony,Ant.ID) %>%
   filter(Num.Inspections==0) %>%
+  filter(Ant.In.Pair=="A") %>%
   summarize(num_turns=n(), 
             narrow_turns=sum(Turn.Width=="N",na.rm=T), 
             wide_turns=sum(Turn.Width=="W",na.rm=T), 
@@ -268,7 +304,7 @@ summary(wide.model)
 anova(wide.model,no.bias.model)
 ```
 
-Comparing the fitted model with a model of known slope (=0.5) shows that outgoing ants have a significant wide bias, staying on the wide branch 57.9% of the time where width could be considered. This plot illustrates this:
+Comparing the fitted model with a model of known slope (=0.5) shows that outgoing ants have a significant wide bias, staying on the wide branch 63.2% of the time where width could be considered. This plot illustrates this:
 
 ```{r}
 max_turns <- max(turn_choices_by_ant_width$total_width_turns)
