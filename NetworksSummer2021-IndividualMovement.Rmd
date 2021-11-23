@@ -78,6 +78,16 @@ turns <- turns %>%
     Rel.Width.From=="wide" & Rel.Width.To=="narrow" ~ "N",
     Rel.Width.From=="wide" & Rel.Width.To=="wide" ~ "W")))
 
+turns <- turns %>%
+  mutate(Turn.Trunk = if_else(Direction.From == Direction.To, NA_character_,case_when(
+    Direction.From=="left" & Direction.To=="main" ~ "to.trunk",
+    Direction.From=="right" & Direction.To=="main" ~ "to.trunk",
+    Direction.From=="main" & Direction.To=="left" ~ "away.from.trunk",
+    Direction.From=="main" & Direction.To=="right" ~ "away.from.trunk",
+    Direction.From=="left" & Direction.To=="right" ~ "away.from.trunk",
+    Direction.From=="right" & Direction.To=="left" ~ "away.from.trunk"
+  )))
+
 ```
 
 Finally, we want to join our data on individual movement between junctions with this data describing the types of turns. To do this, first we need to fill in some missing information: where the ant came from, and where it's going. We begin with information about the sequence of junctions visited ("Junction"). This is typically sufficient to reconstruct the whole trajectory: the ant came from the previous junction in the list, and went towards to next junction in the list. However, if the ant made a U-turn along a branch, we have an exception: the ant actually never reached the node it was going towards when it first exited the junction, which is also the node it was traveling from when it reenters the same junction again. In this case, we recorded the junction it was traveling towards in the column ("Exited Toward").
@@ -318,3 +328,72 @@ ggplot(turn_choices_by_ant_width, aes(x=total_width_turns,y=wide_turns)) +
 ggsave("images/WidevsTotalTurns.png", 
        dpi=300, width = 8, height = 5, units = "in")
 ```
+
+### Are they more likely to travel toward or away from the trunk?
+Are ants generally more likely to move toward or away from the trunk? How does this tendency change after they have inspected something at a tip?
+
+Analysis including ant choices both before and after inspection, without differentiating between the two.
+```{r}
+# modify this
+turn_choices_by_ant_trunk <- turn_choices %>% 
+  group_by(Colony,Ant.ID) %>%
+  #filter(Num.Inspections==0) %>% Unlike with the past analyses, we don't want 
+  # to filter out the decisions made after inspection.
+  filter(Ant.In.Pair=="A") %>% # Still do filter out the second ant in the pair 
+  #because it might be influenced by the first
+  summarize(num_turns=n(), 
+            turns_to_trunk=sum(Turn.Trunk=="to.trunk",na.rm=T), 
+            turns_away_from_trunk=sum(Turn.Trunk=="away.from.trunk",na.rm=T), 
+            total_trunk_turns=turns_to_trunk+turns_away_from_trunk) %>%
+  ungroup()
+
+trunk.model <- lm(turns_to_trunk ~ total_trunk_turns + 0,
+                  data=turn_choices_by_ant_trunk)
+no.bias.model <- lm(turns_to_trunk ~ offset(0.5*total_trunk_turns)+0, 
+                    data=turn_choices_by_ant_trunk)
+summary(trunk.model)
+anova(trunk.model,no.bias.model)
+```
+Like when analyzing left vs right or wide vs narrow turns the ants made, the no bias model is that the ants have a 50:50 chance of picking either option between "to trunk" or "away from trunk". It appears that ants turn toward the trunk about 37.920% of the time overall.
+
+How does the likelihood of moving toward the trunk differ before and after an ant has inspected? (e.g. do ants tend to go to the trunk after inspecting at a tip?)
+```{r}
+# group turn_choices by whether Num.Inspections is 0 or not
+# for the two categories, do ANOVA separately.
+turn_choices_trunk_before_inspect <- turn_choices %>% 
+  group_by(Colony,Ant.ID) %>%
+  filter(Num.Inspections==0) %>% # ant has not inspected yet
+  filter(Ant.In.Pair=="A") %>% 
+  summarize(num_turns=n(), 
+            turns_to_trunk=sum(Turn.Trunk=="to.trunk",na.rm=T), 
+            turns_away_from_trunk=sum(Turn.Trunk=="away.from.trunk",na.rm=T), 
+            total_trunk_turns=turns_to_trunk+turns_away_from_trunk) %>%
+  ungroup()
+
+trunk.model <- lm(turns_to_trunk ~ total_trunk_turns + 0,
+                  data=turn_choices_trunk_before_inspect)
+no.bias.model <- lm(turns_to_trunk ~ offset(0.5*total_trunk_turns)+0, 
+                    data=turn_choices_trunk_before_inspect)
+summary(trunk.model)
+anova(trunk.model,no.bias.model)
+```
+
+```{r}
+turn_choices_trunk_after_inspect <- turn_choices %>% 
+  group_by(Colony,Ant.ID) %>%
+  filter(Num.Inspections!=0) %>% # ant has already inspected
+  filter(Ant.In.Pair=="A") %>% 
+  summarize(num_turns=n(), 
+            turns_to_trunk=sum(Turn.Trunk=="to.trunk",na.rm=T), 
+            turns_away_from_trunk=sum(Turn.Trunk=="away.from.trunk",na.rm=T), 
+            total_trunk_turns=turns_to_trunk+turns_away_from_trunk) %>%
+  ungroup()
+
+trunk.model <- lm(turns_to_trunk ~ total_trunk_turns + 0,
+                  data=turn_choices_trunk_after_inspect)
+no.bias.model <- lm(turns_to_trunk ~ offset(0.5*total_trunk_turns)+0, 
+                    data=turn_choices_trunk_after_inspect)
+summary(trunk.model)
+anova(trunk.model,no.bias.model)
+```
+Before inspecting, the ants have at 36.336% chance of turning toward the trunk. After inspecting, that chance is 38.977%. I could do a statistical test to determine whether this difference in proportions is significant, but that's not the focus here. I could also distinguish between number of inspections done and do ANOVA based on that, but I'm not sure whether that's useful to know or not.
