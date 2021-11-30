@@ -420,21 +420,34 @@ ggsave("images/ToTrunkvsTotalTurns.png",
 If an ant turns [left/right/U-turn], what is the likelihood that the next turn will be [left/right/U-turn]?
 e.g. How often is a right turn followed by a left turn? By a right turn? By a U-turn?
 ```{r}
-#Need to consider all possible turn choices
-#use lag/lead to mutate new var
-#would probably be better to make a 3x3 table
 turn_choices_seq <- turn_choices %>%
   group_by(Colony,Ant.ID) %>%
   filter(Num.Inspections==0) %>%
   filter(Ant.In.Pair=="A") %>% 
   mutate(Next.Turn.Type = lead(Turn.Type)) %>%
-  #filter(Next.Turn.Type != NA) %>% # want to remove the turns for which Next.Turn.Type == NA
+  #mutate(Turn.Seq.Pair = ifelse(is.na(Next.Turn.Type), NA, paste(Turn.Type, Next.Turn.Type))) %>%
   ungroup()
 
-#View(turn_choices_seq %>% select(Date, Colony, Ant.ID, Turn.Type, Next.Turn.Type))
-Turn.Seq.Pair <- c(rep(c("test1", "test2"), times=length(turn_choices_seq$Turn.Type)))
-for (i in length(turn_choices_seq$Turn.Type)) {
-  Turn.Seq.Pair[i] <- c(turn_choices_seq$Turn.Type[i], turn_choices_seq$Next.Turn.Type[i])
-}
+#split_Turn.Seq.Pair <- strsplit(turn_choices_seq$Turn.Seq.Pair, " ")
+
+# Summary:
+num_of_turn1_then_turn2 <- turn_choices_seq %>%
+  group_by(Turn.Type, Next.Turn.Type) %>%
+  filter(is.na(Turn.Type) == FALSE & is.na(Next.Turn.Type) == FALSE) %>%
+  summarize(n_turn1_then_turn2=n())
+
+num_of_turn1 <- turn_choices_seq %>%
+  group_by(Turn.Type) %>%
+  filter(is.na(Turn.Type) == FALSE & is.na(Next.Turn.Type) == FALSE) %>%
+  summarize(n_turn1=n()) 
+
+left_join(num_of_turn1_then_turn2, num_of_turn1, by=c("Turn.Type")) %>%
+  group_by(Turn.Type, Next.Turn.Type) %>%
+  summarize(n=n_turn1_then_turn2, prop_turn1_then_turn2 = n_turn1_then_turn2/n_turn1)
+# Proportions are calculated relative to the number of turns that started with the
+# given direction, e.g. for (L, L) you would do 97/(97+74+23)
+
+# Will we want to exclude U-turns from analysis?
 ```
+[insert summary of data analysis here]
 
