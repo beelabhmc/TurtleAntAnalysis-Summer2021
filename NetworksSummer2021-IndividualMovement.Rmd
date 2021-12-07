@@ -441,13 +441,98 @@ num_of_turn1 <- turn_choices_seq %>%
   filter(is.na(Turn.Type) == FALSE & is.na(Next.Turn.Type) == FALSE) %>%
   summarize(n_turn1=n()) 
 
-left_join(num_of_turn1_then_turn2, num_of_turn1, by=c("Turn.Type")) %>%
+turn_choices_seq_summary <- left_join(num_of_turn1_then_turn2, num_of_turn1, by=c("Turn.Type")) %>%
   group_by(Turn.Type, Next.Turn.Type) %>%
   summarize(n=n_turn1_then_turn2, prop_turn1_then_turn2 = n_turn1_then_turn2/n_turn1)
 # Proportions are calculated relative to the number of turns that started with the
 # given direction, e.g. for (L, L) you would do 97/(97+74+23)
 
+turn_choices_seq_summary
+
 # Will we want to exclude U-turns from analysis?
 ```
-[insert summary of data analysis here]
+When an ant turns one direction, the next turn is more likely to be in that same direction than in the opposite direction (i.e. 50% chance to follow a L turn with L, 38% chance to follow L turn with R; 60% to follow R turn with R, 25% to follow R turn with L). After a U-turn, an ant is slightly more likely to turn right than left, and will very rarely follow a U-turn with a U-turn.
+
+Visualization:
+```{r}
+ggplot(turn_choices_seq_summary, aes(x=Turn.Type, y=prop_turn1_then_turn2)) + 
+  geom_col(aes(fill = Next.Turn.Type)) +
+  xlab("First turn type") +
+  ylab("Proportion of next turn type")
+
+ggsave("images/SequentialTurnTypeDecisions.png", 
+       dpi=300, width = 8, height = 5, units = "in")
+```
+
+
+Seeing the data above, I realized that U-turns make up a substantial proportion of ant turns. If an ant is more likely to make a U-turn after a certain type of turn, that could introduce additional bias into the data. I'd like to determine the strength of the bias and also look at the data with U-turns excluded.
+
+If an ant turns [toward/away from] the trunk, what is the likelihood of a [R/L/U] turn?
+```{r}
+#still using turn_choices_seq because the data we need for this question is all in turn_choices_seq
+
+# Summary:
+num_of_turn1_then_turn2 <- turn_choices_seq %>%
+  group_by(Turn.Trunk, Next.Turn.Type) %>%
+  filter(is.na(Turn.Trunk) == FALSE & is.na(Next.Turn.Type) == FALSE) %>%
+  summarize(n_turn1_then_turn2=n())
+
+num_of_turn1 <- turn_choices_seq %>%
+  group_by(Turn.Trunk) %>%
+  filter(is.na(Turn.Trunk) == FALSE & is.na(Next.Turn.Type) == FALSE) %>%
+  summarize(n_turn1=n()) 
+
+turn_choices_trunk_then_type_summary <- left_join(num_of_turn1_then_turn2, num_of_turn1, by=c("Turn.Trunk")) %>%
+  group_by(Turn.Trunk, Next.Turn.Type) %>%
+  summarize(n=n_turn1_then_turn2, prop_turn1_then_turn2 = n_turn1_then_turn2/n_turn1)
+
+turn_choices_trunk_then_type_summary
+```
+Regarding the main point of doing this analysis: ants have roughly the same likelihood of making a U-turn next regardless of whether their previous turn was away from or toward the trunk. Therefore, U-turns don't contribute to creating the bias for moving toward the trunk (e.g. it is not the case that ants moving away from the trunk are that much more likely to U-turn and therefore move toward the trunk). Curiously, the chance of moving right is much higher than the chance of moving left, which may or may not actually be consistent with the right turn bias observed earlier (as that previous analysis was done excluding U-turns).
+
+Visualization:
+```{r}
+ggplot(turn_choices_trunk_then_type_summary, aes(x=Turn.Trunk, y=prop_turn1_then_turn2)) + 
+  geom_col(aes(fill = Next.Turn.Type)) +
+  xlab("First turn type") +
+  ylab("Proportion of next turn type")
+  
+ggsave("images/SequentialTurnTypeDecisionsTrunkToType.png", 
+       dpi=300, width = 8, height = 5, units = "in")
+```
+
+Why, then, do ants tend to end up at nest 72 rather than at nest 82? It is shown above that the first turn the ants take has a slightly greater chance to be to the left rather than to the right. Nest 72 is to the left while nest 82 is to the right. However, the difference in preference for starting left/right is not great enough on its own to explain the great preference for 72 over 82. We also know that once an ant starts down a path, the likelihood of U-turning (which changes the path the ant takes) is equally likely regardless of whether the ant is moving toward or away from the trunk.
+
+I also want to look at how likely it is for an ant to turn from a wide branch to a narrow branch (or vice versa, or staying on a branch of the same width) when turning toward the trunk or away from the trunk. This tells us whether an ant's preference to go further out onto limbs differs based on whether it's moving toward or away from the trunk. That is something that could affect which nests the ant ends up at.
+```{r}
+# Will need to make a new dataframe rather than reusing turn_choices_seq 
+# because I need to mutate in a new variable for the next value of Turn.Width
+
+turn_choices_seq_width <- turn_choices %>%
+  group_by(Colony,Ant.ID) %>%
+  filter(Num.Inspections==0) %>%
+  filter(Ant.In.Pair=="A") %>% 
+  mutate(Next.Turn.Width = lead(Turn.Width)) %>%
+  ungroup()
+
+# Summary:
+num_of_turn1_then_turn2 <- turn_choices_seq_width %>%
+  group_by(Turn.Trunk, Next.Turn.Width) %>%
+  filter(is.na(Turn.Trunk) == FALSE & is.na(Next.Turn.Width) == FALSE) %>%
+  summarize(n_turn1_then_turn2=n())
+
+num_of_turn1 <- turn_choices_seq_width %>%
+  group_by(Turn.Trunk) %>%
+  filter(is.na(Turn.Trunk) == FALSE & is.na(Next.Turn.Width) == FALSE) %>%
+  summarize(n_turn1=n()) 
+
+turn_choices_seq_width_summary <- left_join(num_of_turn1_then_turn2, num_of_turn1, by=c("Turn.Trunk")) %>%
+  group_by(Turn.Trunk, Next.Turn.Width) %>%
+  summarize(n=n_turn1_then_turn2, prop_turn1_then_turn2 = n_turn1_then_turn2/n_turn1)
+
+turn_choices_seq_width_summary
+
+```
+It seems that when ants are moving away from the trunk, there is an even greater preference for turning onto wider branches than when ants are moving toward the trunk. In most cases, as ants move to nests they must make the choice to turn onto narrower branches. Because ants moving away from the trunk prefer to turn onto wider branches, this could contribute to decreased nest visits for nests to the right of the entry point (in the visual where the trunk is to the left). It could also deter ants from visiting nests that require three separate instances of choosing the narrower branch (moving from widths of 0.60 to 0.45 to 0.34 to 0.25, e.g. nests 1112 and 2212 if I'm not mistaken). However, nest 82 can be reached without turning onto narrower branches, and yet it is visited very little.  
+Now that I think about it, though, this analysis is flawed. When moving toward the trunk, there are more routes that involve moving from narrow to wide branches, e.g moving from a tip to a wider branch and then to the main (thickest) branch. On the other hand, moving away from the trunk involves moving from wider to narrower branches. I will exclude this analysis from my presentation.
 
