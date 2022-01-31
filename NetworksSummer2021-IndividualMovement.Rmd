@@ -536,3 +536,12 @@ turn_choices_seq_width_summary
 It seems that when ants are moving away from the trunk, there is an even greater preference for turning onto wider branches than when ants are moving toward the trunk. In most cases, as ants move to nests they must make the choice to turn onto narrower branches. Because ants moving away from the trunk prefer to turn onto wider branches, this could contribute to decreased nest visits for nests to the right of the entry point (in the visual where the trunk is to the left). It could also deter ants from visiting nests that require three separate instances of choosing the narrower branch (moving from widths of 0.60 to 0.45 to 0.34 to 0.25, e.g. nests 1112 and 2212 if I'm not mistaken). However, nest 82 can be reached without turning onto narrower branches, and yet it is visited very little.  
 Now that I think about it, though, this analysis is flawed. When moving toward the trunk, there are more routes that involve moving from narrow to wide branches, e.g moving from a tip to a wider branch and then to the main (thickest) branch. On the other hand, moving away from the trunk involves moving from wider to narrower branches. I will exclude this analysis from my presentation.
 
+### Developing is.left.turn.model
+
+First to develop our set of variables:
+Direction.From = main, wide, narrow
+Junction.Handedness = left, right
+isLeft = T, F
+```{r}
+
+```
