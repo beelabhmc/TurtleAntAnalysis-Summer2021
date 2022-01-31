@@ -541,7 +541,17 @@ Now that I think about it, though, this analysis is flawed. When moving toward t
 First to develop our set of variables:
 Direction.From = main, wide, narrow
 Junction.Handedness = left, right
+  stored in junction_type
 isLeft = T, F
-```{r}
 
+```{r}
+junction_type <- branches %>%
+  filter(Rel.Width=="narrow") %>%
+  mutate(Handedness_raw = ifelse(
+    Direction=="left",1,
+    ifelse(Direction=="right",-1,
+           0)
+  )) %>%
+  group_by(Junction) %>%
+  summarize(Junction.Handedness = sum(Handedness_raw))
 ```
