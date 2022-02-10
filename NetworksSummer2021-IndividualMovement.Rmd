@@ -555,3 +555,38 @@ junction_type <- branches %>%
   group_by(Junction) %>%
   summarize(Junction.Handedness = sum(Handedness_raw))
 ```
+
+junction_type is a table of junction ID number and handedness where left is 1, right is -1, and the two edge cases where both exits are narrow are 0. These could be excluded from our model but they do have a handedness, which cannot be extracted by analyzing narrow/wideness.
+
+Now I implement these variables into turns as Direction.From and Junction.Handedness.
+
+```{r}
+turns <- turns %>%
+  left_join(junction_type, by="Junction") 
+```
+
+```{r}
+turns <- turns %>%
+  mutate(Turn.Angle = case_when(
+    Direction.From=='main' & Turn.Type=='L' & Junction.Handedness==1 ~ "sharp",
+    Direction.From=='main' & Turn.Type=='R' & Junction.Handedness==1 ~ "shallow",
+    Direction.From=='main' & Turn.Type=='L' & Junction.Handedness==-1 ~ "shallow",
+    Direction.From=='main' & Turn.Type=='R' & Junction.Handedness==-1 ~ "sharp",
+    Direction.From=='left' & Turn.Type=='L' ~ "sharp",
+    Direction.From=='left' & Turn.Type=='R' ~ "shallow",
+    Direction.From=='right' & Turn.Type=='L' ~ "shallow",
+    Direction.From=='right' & Turn.Type=='R' ~ "sharp",
+    Junction==111 & Turn.Type=='L' ~ "shallow",
+    Junction==111 & Turn.Type=='R' ~ "sharp",
+    Junction==221 & Turn.Type=='L' ~ "sharp",
+    Junction==221 & Turn.Type=='R' ~ "shallow"
+  )
+  )
+```
+
+Finally I left_join the turn choices by Node.From and Node.To to get a column for angle of turn.
+
+```{r}
+turn_choices_angle <- turn_choices %>%
+  left_join(turns, by=c("Node.From", "Node.To"))
+```
