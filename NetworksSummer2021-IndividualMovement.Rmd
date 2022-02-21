@@ -567,26 +567,53 @@ turns <- turns %>%
 
 ```{r}
 turns <- turns %>%
-  mutate(Turn.Angle = case_when(
-    Direction.From=='main' & Turn.Type=='L' & Junction.Handedness==1 ~ "sharp",
-    Direction.From=='main' & Turn.Type=='R' & Junction.Handedness==1 ~ "shallow",
-    Direction.From=='main' & Turn.Type=='L' & Junction.Handedness==-1 ~ "shallow",
-    Direction.From=='main' & Turn.Type=='R' & Junction.Handedness==-1 ~ "sharp",
-    Direction.From=='left' & Turn.Type=='L' ~ "sharp",
-    Direction.From=='left' & Turn.Type=='R' ~ "shallow",
-    Direction.From=='right' & Turn.Type=='L' ~ "shallow",
-    Direction.From=='right' & Turn.Type=='R' ~ "sharp",
-    Junction==111 & Turn.Type=='L' ~ "shallow",
-    Junction==111 & Turn.Type=='R' ~ "sharp",
-    Junction==221 & Turn.Type=='L' ~ "sharp",
-    Junction==221 & Turn.Type=='R' ~ "shallow"
-  )
+  mutate(
+    Turn.Angle = case_when(
+      Direction.From=='main' & Turn.Type=='L' & Junction.Handedness==1 ~ "sharp",
+      Direction.From=='main' & Turn.Type=='R' & Junction.Handedness==1 ~ "shallow",
+      Direction.From=='main' & Turn.Type=='L' & Junction.Handedness==-1 ~ "shallow",
+      Direction.From=='main' & Turn.Type=='R' & Junction.Handedness==-1 ~ "sharp",
+      Direction.From=='left' & Turn.Type=='L' ~ "sharp",
+      Direction.From=='left' & Turn.Type=='R' ~ "shallow",
+      Direction.From=='right' & Turn.Type=='L' ~ "shallow",
+      Direction.From=='right' & Turn.Type=='R' ~ "sharp",
+      Junction==111 & Turn.Type=='L' ~ "shallow",
+      Junction==111 & Turn.Type=='R' ~ "sharp",
+      Junction==221 & Turn.Type=='L' ~ "sharp",
+      Junction==221 & Turn.Type=='R' ~ "shallow")) %>%
+  mutate(
+    isSharpTurn = if_else(
+      Turn.Angle == "sharp",TRUE,FALSE
+    ),
+    isLeft = case_when(
+      Turn.Type == 'L' ~ TRUE,
+      Turn.Type == 'R' ~ FALSE
+    ),
+    Angle.From = case_when(
+      Direction.From == 'main' ~ "main",
+      Direction.From == 'left' & Junction.Handedness == 1 ~ "sharp",
+      Direction.From == 'left' & Junction.Handedness == -1 ~ "shallow",
+      Direction.From == 'right' & Junction.Handedness == 1 ~ "shallow",
+      Direction.From == 'right' & Junction.Handedness == -1 ~ "sharp",
+      Direction.From == 'left' & Junction == 111 ~ "shallow",
+      Direction.From == 'right' & Junction == 111 ~ "sharp",
+      Direction.From == 'left' & Junction == 221 ~ "sharp",
+      Direction.From == 'right' & Junction == 221 ~ "shallow"
+    )
   )
 ```
 
-Finally I left_join the turn choices by Node.From and Node.To to get a column for angle of turn.
+Finally I left_join the turn choices by Node.From and Node.To to get a column for angle of turn, with U turns removed (they are not useful in this analysis).
 
 ```{r}
 turn_choices_angle <- turn_choices %>%
-  left_join(turns, by=c("Node.From", "Node.To"))
+  left_join(select(turns, Node.From,Node.To,Turn.Angle,isLeft,Angle.From,isSharpTurn), by=c("Node.From", "Node.To")) %>%
+  filter(Turn.Type != "U")
 ```
+
+Now the table turn_choices_angle feeds data to perform binomial glm regression and find the data from this.
+
+```{r}
+angle_model <- glm(isSharpTurn ~ Angle.From + isLeft, family = binomial, turn_choices_angle)
+```
+
