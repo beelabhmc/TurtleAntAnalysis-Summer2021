@@ -547,10 +547,11 @@ isLeft = T, F
 ```{r}
 junction_type <- branches %>%
   filter(Rel.Width=="narrow") %>%
-  mutate(Handedness_raw = ifelse(
-    Direction=="left",1,
-    ifelse(Direction=="right",-1,
-           0)
+  mutate(Handedness_raw = case_when(
+    Direction=="left" ~ 1,
+    Direction=="right" ~ -1,
+    Junction == 111 ~ -1,
+    Junction == 221 ~ 1
   )) %>%
   group_by(Junction) %>%
   summarize(Junction.Handedness = sum(Handedness_raw))
@@ -586,8 +587,8 @@ turns <- turns %>%
       Turn.Angle == "sharp",TRUE,FALSE
     ),
     isLeft = case_when(
-      Turn.Type == 'L' ~ TRUE,
-      Turn.Type == 'R' ~ FALSE
+      Junction.Handedness == 1 ~ TRUE,
+      Junction.Handedness == -1 ~ FALSE
     ),
     Angle.From = case_when(
       Direction.From == 'main' ~ "main",
@@ -614,6 +615,7 @@ turn_choices_angle <- turn_choices %>%
 Now the table turn_choices_angle feeds data to perform binomial glm regression and find the data from this.
 
 ```{r}
-angle_model <- glm(isSharpTurn ~ Angle.From + isLeft, family = binomial, turn_choices_angle)
+angle_model_plus <- glm(isSharpTurn ~ Angle.From + isLeft, family = binomial, turn_choices_angle)
+angle_model_star <- glm(isSharpTurn ~ Angle.From * isLeft, family = binomial, turn_choices_angle)
 ```
 
