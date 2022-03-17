@@ -13,10 +13,10 @@ require(dplyr)
 require(tidyr)
 require(ggthemes)
 require(grDevices)
+require(lme4)
 ```
 
 ## Hypotheses / Questions
-
 We would like to discover the rules by which individual turtle ants move through a branching structure.
 
 1. Are they more likely to take left or right turns?
@@ -63,7 +63,7 @@ branches <- branches %>%
 turns <- full_join(branches,branches,by=c("Junction"),suffix=c(".From",".To")) %>%
   rename(Node.From=Leads.to.Node.From, Node.To=Leads.to.Node.To)
 turns <- turns %>%
-  mutate(Turn.Type = case_when(
+  mutate(Turn.Type = factor(case_when(
     Direction.From=="main" & Direction.To=="left" ~ "L",
     Direction.From=="main" & Direction.To=="right" ~ "R",
     Direction.From=="left" & Direction.To=="right" ~ "L",
@@ -71,7 +71,7 @@ turns <- turns %>%
     Direction.From=="right" & Direction.To=="main" ~ "L",
     Direction.From=="right" & Direction.To=="left" ~ "R",
     TRUE ~ "U"
-  ))
+  )))
 
 turns <- turns %>%
   mutate(Turn.Width = if_else(Node.From == Node.To, NA_character_,case_when(
@@ -98,6 +98,7 @@ movement <- read.csv("data/NetworksSummer2021-IndividualMovement.csv",
 movement <- movement %>%
   select(Date, Colony, Ant.ID, Time, Junction, 
          Entered.From, Exited.Toward, Action..inspect.ignore.) %>%
+  mutate(Colony=factor(Colony),Ant.ID=factor(Ant.ID)) %>%
   group_by(Colony,Ant.ID) %>%
   # Ants come in pairs, labeled e.g. as 1A and 1B
   # We want to be able to distinguish the first ant (A) 
@@ -536,86 +537,160 @@ turn_choices_seq_width_summary
 It seems that when ants are moving away from the trunk, there is an even greater preference for turning onto wider branches than when ants are moving toward the trunk. In most cases, as ants move to nests they must make the choice to turn onto narrower branches. Because ants moving away from the trunk prefer to turn onto wider branches, this could contribute to decreased nest visits for nests to the right of the entry point (in the visual where the trunk is to the left). It could also deter ants from visiting nests that require three separate instances of choosing the narrower branch (moving from widths of 0.60 to 0.45 to 0.34 to 0.25, e.g. nests 1112 and 2212 if I'm not mistaken). However, nest 82 can be reached without turning onto narrower branches, and yet it is visited very little.  
 Now that I think about it, though, this analysis is flawed. When moving toward the trunk, there are more routes that involve moving from narrow to wide branches, e.g moving from a tip to a wider branch and then to the main (thickest) branch. On the other hand, moving away from the trunk involves moving from wider to narrower branches. I will exclude this analysis from my presentation.
 
-### Developing is.left.turn.model
+### Do ants have a turning angle bias?
 
-First to develop our set of variables:
-Direction.From = main, wide, narrow
-Junction.Handedness = left, right
-  stored in junction_type
-isLeft = T, F
+We would like to know whether ants choose which direction to turn based on the turning angle. In particular, we hypothesize that they prefer a shallower (less deviating) turn at an asymmetric Y-shaped junction. 
+
+To determine this, we will ask whether ants tend to take the sharper (more deviating) or shallower (less deviating) turn, and whether any observed preference depends on:
+
+1. Whether the sharper turn is on the left side or the right side
+
+1. The direction the ant approaches the junction from: the main branch (main), the thinner more angled offshoot (sharp), or the thicker less angled offshoot (shallow)
+
+To do this, we'll need to introduce some new variables to describe the junctions and the turns at each junction. First of all, we classify each junction as a left-handed one (with the sharp offshoot to the left) or a right-handed one (with the sharp offshoot to the right).
 
 ```{r}
 junction_type <- branches %>%
   filter(Rel.Width=="narrow") %>%
   mutate(Handedness_raw = case_when(
-    Direction=="left" ~ 1,
-    Direction=="right" ~ -1,
-    Junction == 111 ~ -1,
-    Junction == 221 ~ 1
+    Direction=="left" ~ "LH", #left-handed junction
+    Direction=="right" ~ "RH", #right-handed junction
+    Junction == 111 ~ "RH", #can't tell from width, but it's RH
+    Junction == 221 ~ "LH" # can't tell from width, but it's LH
   )) %>%
   group_by(Junction) %>%
-  summarize(Junction.Handedness = sum(Handedness_raw))
+  summarize(Junction.Handedness = 
+              names(which.max(table(Handedness_raw)))) %>%
+  mutate(Junction.Handedness=factor(Junction.Handedness))
 ```
 
-junction_type is a table of junction ID number and handedness where left is 1, right is -1, and the two edge cases where both exits are narrow are 0. These could be excluded from our model but they do have a handedness, which cannot be extracted by analyzing narrow/wideness.
+This produces a table of junction ID number and handedness. The two special cases where both offshoots are narrow could be excluded from our model but they do have a handedness, which cannot be extracted by analyzing narrow/wideness.
 
-Now I implement these variables into turns as Direction.From and Junction.Handedness.
+Now we can create a new way to classify each turn (`Turn.Angle`), as "sharp" or "shallow", according to how the ant entered the junction (`Direction.From`: "main", "left", "right") and the handedness of that junction (`Junction.Handedness`: "LH", "RH"). For example, if the ant enters from "main", and turns left on a left-handed junction, that means it has taken the sharper turn.
+
+We also classify the direction it has come from (`Angle.From`) according to the angle, so for example an ant coming from the left branch on a left-handed junction is coming from the "sharp" direction (the more-angled offshoot), while an ant coming from the left branch on a right-handed junction is coming from the "shallow" direction (the less-angled offshoot).
+
+Finally, we determine whether the sharper turn is on the left side or the right side (`sharpIsLeft`), which depends on whether it is a left or right-handed junctions, and which branch the ant is coming from.
 
 ```{r}
 turns <- turns %>%
   left_join(junction_type, by="Junction") 
-```
 
-```{r}
 turns <- turns %>%
   mutate(
     Turn.Angle = case_when(
-      Direction.From=='main' & Turn.Type=='L' & Junction.Handedness==1 ~ "sharp",
-      Direction.From=='main' & Turn.Type=='R' & Junction.Handedness==1 ~ "shallow",
-      Direction.From=='main' & Turn.Type=='L' & Junction.Handedness==-1 ~ "shallow",
-      Direction.From=='main' & Turn.Type=='R' & Junction.Handedness==-1 ~ "sharp",
+      Direction.From=='main' & Turn.Type=='L' & Junction.Handedness=="LH" ~ "sharp",
+      Direction.From=='main' & Turn.Type=='R' & Junction.Handedness=="LH" ~ "shallow",
+      Direction.From=='main' & Turn.Type=='L' & Junction.Handedness=="RH" ~ "shallow",
+      Direction.From=='main' & Turn.Type=='R' & Junction.Handedness=="RH" ~ "sharp",
       Direction.From=='left' & Turn.Type=='L' ~ "sharp",
       Direction.From=='left' & Turn.Type=='R' ~ "shallow",
       Direction.From=='right' & Turn.Type=='L' ~ "shallow",
-      Direction.From=='right' & Turn.Type=='R' ~ "sharp",
-      Junction==111 & Turn.Type=='L' ~ "shallow",
-      Junction==111 & Turn.Type=='R' ~ "sharp",
-      Junction==221 & Turn.Type=='L' ~ "sharp",
-      Junction==221 & Turn.Type=='R' ~ "shallow")) %>%
-  mutate(
-    isSharpTurn = if_else(
-      Turn.Angle == "sharp",TRUE,FALSE
+      Direction.From=='right' & Turn.Type=='R' ~ "sharp"),
+      #Junction==111 & Turn.Type=='L' ~ "shallow",
+      #Junction==111 & Turn.Type=='R' ~ "sharp",
+      #Junction==221 & Turn.Type=='L' ~ "sharp",
+      #Junction==221 & Turn.Type=='R' ~ "shallow")) %>%
+    isSharpTurn = Turn.Angle == "sharp",
+    sharpIsLeft = case_when(
+      Direction.From=='main' & Junction.Handedness=="LH" ~ TRUE,
+      Direction.From=='left' & Junction.Handedness=="LH" ~ TRUE,
+      Direction.From=='left' & Junction.Handedness=="RH" ~ TRUE,
+      TRUE ~ FALSE # for all other cases, sharp is not left
     ),
-    isLeft = case_when(
-      Junction.Handedness == 1 ~ TRUE,
-      Junction.Handedness == -1 ~ FALSE
-    ),
-    Angle.From = case_when(
+    Angle.From = factor(case_when(
       Direction.From == 'main' ~ "main",
-      Direction.From == 'left' & Junction.Handedness == 1 ~ "sharp",
-      Direction.From == 'left' & Junction.Handedness == -1 ~ "shallow",
-      Direction.From == 'right' & Junction.Handedness == 1 ~ "shallow",
-      Direction.From == 'right' & Junction.Handedness == -1 ~ "sharp",
-      Direction.From == 'left' & Junction == 111 ~ "shallow",
-      Direction.From == 'right' & Junction == 111 ~ "sharp",
-      Direction.From == 'left' & Junction == 221 ~ "sharp",
-      Direction.From == 'right' & Junction == 221 ~ "shallow"
-    )
+      Direction.From == 'left' & Junction.Handedness == "LH" ~ "sharp",
+      Direction.From == 'left' & Junction.Handedness == "RH" ~ "shallow",
+      Direction.From == 'right' & Junction.Handedness == "LH" ~ "shallow",
+      Direction.From == 'right' & Junction.Handedness == "RH" ~ "sharp"
+      # Direction.From == 'left' & Junction == 111 ~ "shallow",
+      # Direction.From == 'right' & Junction == 111 ~ "sharp",
+      # Direction.From == 'left' & Junction == 221 ~ "sharp",
+      # Direction.From == 'right' & Junction == 221 ~ "shallow"
+    ))
   )
 ```
 
-Finally I left_join the turn choices by Node.From and Node.To to get a column for angle of turn, with U turns removed (they are not useful in this analysis).
+Finally we join the actual turn choices individual ants made (`turn_choices`) with the different types of turns (`turns`), using `Node.From` and `Node.To`. This creates a table of turns taken, including our new columns (`Turn.Angle`, `Junction.Handedness`, `Angle.From`, `sharpIsLeft` and `isSharpTurn`). For this analysis we only use exploratory travel (all turns before the first nest is reached) by the first ant in the pair, and we ignore U-turns.
 
 ```{r}
 turn_choices_angle <- turn_choices %>%
-  left_join(select(turns, Node.From,Node.To,Turn.Angle,isLeft,Angle.From,isSharpTurn), by=c("Node.From", "Node.To")) %>%
+  left_join(select(
+    turns, Node.From, Node.To, Turn.Angle, Angle.From,
+    isSharpTurn, sharpIsLeft, Junction.Handedness), 
+    by=c("Node.From", "Node.To")) %>%
+  filter(Num.Inspections==0,Ant.In.Pair=="A") %>%
   filter(Turn.Type != "U")
 ```
 
-Now the table turn_choices_angle feeds data to perform binomial glm regression and find the data from this.
+Now we can analyze the turn choices made. We use logistic regression (a binomial generalized linear mixed effects model) to create a model of whether the ant chooses the shallower or sharper turn at each junction. To begin with we look at the null model, which tells us overall whether the turn choice depends on angle at all.
 
 ```{r}
-angle_model_plus <- glm(isSharpTurn ~ Angle.From + isLeft, family = binomial, turn_choices_angle)
-angle_model_star <- glm(isSharpTurn ~ Angle.From * isLeft, family = binomial, turn_choices_angle)
+null_model <- glmer(
+  isSharpTurn ~ (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_angle)
+summary(null_model)
 ```
 
+The fact that the intercept is significantly below zero means that ants are significantly less likely to take the sharper turn than the shallower turn. Now let's see if that bias is influenced by anything else. First we can see whether those sharp turns are more likely to be taken if they are also on the left side.
+
+```{r}
+leftright_model <- glmer(
+  isSharpTurn ~ sharpIsLeft + (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_angle)
+summary(leftright_model)
+anova(null_model,leftright_model)
+```
+
+The answer is yes; if the sharp turn is on the left, it is significantly less likely to be taken. Now let's see whether this depends on the direction it came from (`Angle.From`: the main branch, the sharper-angled offshoot, or the shallower-angled offshoot). We'll construct a series of nested models including the `Angle.From` alone, including `Angle.From` and `sharpIsLeft` as additive effects, and including all combinations of `Angle.From` and `sharpIsLeft`. We can compare models using `anova` (a likelihood ratio test) to see whether a more complex model provides a significantly better fit.
+
+```{r}
+# We'll try three successively more complex models
+angle_model <- glmer(
+  isSharpTurn ~ Angle.From + (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_angle)
+angle_model_plus <- glmer(
+  isSharpTurn ~ Angle.From + sharpIsLeft + (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_angle)
+angle_model_star <- glmer(
+  isSharpTurn ~ Angle.From * sharpIsLeft + (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_angle)
+
+# Which model is best?
+anova(null_model,angle_model,test="Chisq")
+anova(angle_model,angle_model_plus,test="Chisq")
+anova(angle_model_plus,angle_model_star,test="Chisq")
+
+summary(angle_model_plus)
+```
+
+The best model is the one including both the direction of approach, and whether the sharp turn is on the left side, as independent additive effects on the log-odds ratio. When the ant is approaching the turn from the less-angled offshoot, it is much more likely to continue straight back along the main branch than to turn sharply onto the other offshoot. 
+
+To interpret the model, let's look at the estimates and 95% CI for the coefficients for each fixed effect (which direction the ant is coming from, and whether the sharp turn is on the left). We can also use the model to make predictions for each possible approach.
+
+```{r}
+# these confidence intervals are in the log-odds scale
+angle.ci <- confint(angle_model_plus,parm="beta_")
+angle.ci
+
+# create a small table containing all six types of approaches
+approach.types <- turn_choices_angle %>% 
+  ungroup() %>% 
+  select(Angle.From, Junction.Handedness, Direction.From, sharpIsLeft) %>% 
+  distinct() %>%
+  arrange(Angle.From, sharpIsLeft)
+# use the table to make predictions from the model
+approach.types$Predictions <- predict(
+  angle_model_plus, newdata=approach.types, 
+  re.form=NA, # this says ignore random effects in the predictions
+  type="response" # this says convert output to probabilities
+)
+approach.types
+```
+
+Here are a couple of ideas for visualization (not mutually exclusive):
+
+1. Do a plot with all turns (excluding U-turns) on the x axis, and sharp turns on the y axis, broken out into six panels by `Angle.From` and `Junction.Handedness`. Each point represents one junction (node), and you could use colors and/or shapes to distinguish among junctions. The predictions above give you a regression line to plot for each panel.
+
+2. For each of the six combinations of `Angle.From` and `Junction.Handedness`, draw colored arrows (approach, sharp turn, shallow turn) on top of a diagram of the junction, showing the direction of approach and each of the two turns. The width of each arrow should be proportional to the number of ants that approached or turned, summed across all junctions in the category and you can write the actual number next to it or inside it.
