@@ -719,6 +719,6 @@ turn_choices_angle %>%
   facet_grid(rows = vars(Junction.Handedness), cols = vars(Direction.From)) +
   theme_minimal(base_size = 25) +
   labs(title = "Sharp Turns vs Total Turns", y = "Number of Sharp Turns", x = "Number of Total Turns")
-ggsave("Angle_Data_Visualization.png")
+ggsave("images/Angle_Data_Visualization.png")
 ```
 
