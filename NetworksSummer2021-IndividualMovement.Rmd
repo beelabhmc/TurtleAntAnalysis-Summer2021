@@ -689,8 +689,36 @@ approach.types$Predictions <- predict(
 approach.types
 ```
 
+# Visualization of real data
+
 Here are a couple of ideas for visualization (not mutually exclusive):
 
 1. Do a plot with all turns (excluding U-turns) on the x axis, and sharp turns on the y axis, broken out into six panels by `Angle.From` and `Junction.Handedness`. Each point represents one junction (node), and you could use colors and/or shapes to distinguish among junctions. The predictions above give you a regression line to plot for each panel.
 
 2. For each of the six combinations of `Angle.From` and `Junction.Handedness`, draw colored arrows (approach, sharp turn, shallow turn) on top of a diagram of the junction, showing the direction of approach and each of the two turns. The width of each arrow should be proportional to the number of ants that approached or turned, summed across all junctions in the category and you can write the actual number next to it or inside it.
+
+```{r}
+sjPlot::plot_model(angle_model_plus,
+                   show.re.var= TRUE, 
+                   pred.labels =c("(Intercept)", "from shallow", "from sharp", "sharp is left"),
+                   dv.labels= "test")
+```
+
+This is alright but not super intuitive, maybe not work pursuing.
+
+
+```{r}
+turn_choices_angle %>%
+  ungroup() %>%
+  select(Junction, Junction.Handedness, Direction.From, isSharpTurn) %>%
+  group_by(Direction.From, Junction.Handedness, Junction) %>%
+  summarize(Total = n(), Sharp = sum(isSharpTurn)) %>%
+  ggplot() +
+  geom_point(mapping = aes(x = Total, y = Sharp)) +
+  geom_abline(slope=0.5,intercept=0,lty=2) +
+  facet_grid(rows = vars(Junction.Handedness), cols = vars(Direction.From)) +
+  theme_minimal(base_size = 25) +
+  labs(title = "Sharp Turns vs Total Turns", y = "Number of Sharp Turns", x = "Number of Total Turns")
+ggsave("Angle_Data_Visualization.png")
+```
+
