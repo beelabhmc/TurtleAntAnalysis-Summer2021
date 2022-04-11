@@ -661,7 +661,10 @@ angle_model_star <- glmer(
 anova(null_model,angle_model,test="Chisq")
 anova(angle_model,angle_model_plus,test="Chisq")
 anova(angle_model_plus,angle_model_star,test="Chisq")
+```
 
+
+```{r}
 summary(angle_model_plus)
 ```
 
@@ -671,8 +674,8 @@ To interpret the model, let's look at the estimates and 95% CI for the coefficie
 
 ```{r}
 # these confidence intervals are in the log-odds scale
-angle.ci <- confint(angle_model_plus,parm="beta_")
-angle.ci
+#angle.ci <- confint(angle_model_plus,parm="beta_")
+#angle.ci
 
 # create a small table containing all six types of approaches
 approach.types <- turn_choices_angle %>% 
@@ -698,27 +701,109 @@ Here are a couple of ideas for visualization (not mutually exclusive):
 2. For each of the six combinations of `Angle.From` and `Junction.Handedness`, draw colored arrows (approach, sharp turn, shallow turn) on top of a diagram of the junction, showing the direction of approach and each of the two turns. The width of each arrow should be proportional to the number of ants that approached or turned, summed across all junctions in the category and you can write the actual number next to it or inside it.
 
 ```{r}
-sjPlot::plot_model(angle_model_plus,
-                   show.re.var= TRUE, 
-                   pred.labels =c("(Intercept)", "from shallow", "from sharp", "sharp is left"),
-                   dv.labels= "test")
+#sjPlot::plot_model(angle_model_plus,
+#                   show.re.var= TRUE, 
+#                   pred.labels =c("(Intercept)", "from shallow", "from sharp", "sharp is left"),
+#                   dv.labels= "test")
 ```
 
 This is alright but not super intuitive, maybe not work pursuing.
 
 
 ```{r}
-turn_choices_angle %>%
+angle_graph_data <- turn_choices_angle %>%
   ungroup() %>%
-  select(Junction, Junction.Handedness, Direction.From, isSharpTurn) %>%
   group_by(Direction.From, Junction.Handedness, Junction) %>%
+  select(isSharpTurn) %>%
+  filter(Junction != 0) %>%
   summarize(Total = n(), Sharp = sum(isSharpTurn)) %>%
+  mutate(Level = case_when(
+    Junction < 10 ~ "1",
+    Junction >= 10 & Junction < 100 ~ "2",
+    Junction >= 100 & Junction < 1000 ~ "3",
+    Junction >= 1000 ~ "4"),
+    LogTotal = log(Total),
+    LogSharp = log(Sharp)
+    )
+
+fixed_effects <- 
+  as.data.frame(effects::Effect(
+    focal.predictors=c("Angle.From",
+        "sharpIsLeft"), 
+    mod=angle_model_plus))
+```
+
+Join the fixed_effects data frame with approach.types to get them to match for more variable usage.
+
+```{r}
+approach.types <- approach.types
+fixed_effects <- as_tibble(fixed_effects) %>% mutate(sharpIsLeft = as.logical(sharpIsLeft))
+approach.types
+fixed_effects
+
+angle_fit_data <- left_join(approach.types, fixed_effects, by = c("Angle.From","sharpIsLeft"))
+angle_fit_data
+```
+
+```{r}
+sjPlot:: tab_model(angle_model_plus)
+```
+
+Plot the effects of angle_model_plus
+
+```{r}
+# Use the effects package --> effect function. term= the fixed effect you want to get data on, mod= name of your model.
+
+#effects_angle <- effects::effect(term= "Angle.From", mod= angle_model_plus)
+#summary(effects_angle) #output of what the values are
+#df_angle <- as.data.frame(effects_angle)
+```
+
+```{r}
+angle_graph_data %>%
   ggplot() +
   geom_point(mapping = aes(x = Total, y = Sharp)) +
   geom_abline(slope=0.5,intercept=0,lty=2) +
+  geom_abline(data=angle_fit_data, slope=fit, intercept=0, color="blue")# +
+  #geom_ribbon(data= angle_fit_data, aes(x= Direction.From, ymin= lower, ymax= upper), alpha= 0.3, fill="blue") +
+  theme_minimal(base_size = 25)
+```
+
+
+```{r}
+angle_graph_data %>%
+  ggplot() +
+  geom_point(mapping = aes(x = Total, y = Sharp)) +
+  geom_abline(slope=0.5,color = "blue", intercept=0) +
+  geom_abline(data=angle_fit_data, aes(slope = fit, intercept = 0), lty=2) +
+  geom_abline(data=angle_fit_data, aes(slope = upper, intercept = 0), lty = 3) +
+  geom_abline(data=angle_fit_data, aes(slope = lower, intercept = 0), lty = 3) +
   facet_grid(rows = vars(Junction.Handedness), cols = vars(Direction.From)) +
   theme_minimal(base_size = 25) +
   labs(title = "Sharp Turns vs Total Turns", y = "Number of Sharp Turns", x = "Number of Total Turns")
 ggsave("images/Angle_Data_Visualization.png")
+```
+
+
+```{r}
+angle_graph_data %>%
+  ggplot() +
+  geom_point(mapping = aes(x = LogTotal, y = LogSharp)) +
+  geom_abline(slope=1,intercept=log(.5),lty=2) +
+  geom_abline(data=angle_fit_data, aes(slope = 2*fit, intercept = log(.5)), color="blue", lty=2) +
+  geom_abline(data=angle_fit_data, aes(slope = 2*upper, intercept = log(.5)), color="blue", lty = 3) +
+  geom_abline(data=angle_fit_data, aes(slope = 2*lower, intercept = log(.5)), color="blue", lty = 3) +
+  facet_grid(rows = vars(Junction.Handedness), cols = vars(Direction.From)) +
+  theme_minimal(base_size = 20) +
+  labs(title = "Log Sharp Turns vs Log Total Turns", y = "Log Number of Sharp Turns", x = "Log Number of Total Turns")
+ggsave("images/Log_Angle_Data_Visualization.png")
+```
+
+```{r}
+turn_choices_angle %>%
+  ungroup() %>%
+  group_by(Direction.From, Junction.Handedness) %>%
+  select(isSharpTurn) %>%
+  summarize(Total = n(), Sharp = sum(isSharpTurn))
 ```
 
