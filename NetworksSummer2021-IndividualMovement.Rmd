@@ -411,7 +411,7 @@ ggplot(turn_choices_by_ant_trunk, aes(x=total_turns,y=turns_to_trunk)) +
   geom_abline(slope=0.5,intercept=0,lty=2) + 
   xlab("Total number of turns") + ylab("Number of turns to trunk") +
   xlim(0,max_turns_trunk) +
-  theme_minimal(base_size = 25)
+  theme_minimal(base_size = 12)
 ggsave("images/ToTrunkvsTotalTurns.png", 
        dpi=300, width = 8, height = 5, units = "in")
 ```
@@ -689,7 +689,11 @@ approach.types$Predictions <- predict(
   re.form=NA, # this says ignore random effects in the predictions
   type="response" # this says convert output to probabilities
 )
-approach.types
+approach.types <- approach.types %>%
+  mutate(Angle.From = case_when(
+           Angle.From == "main" ~ "Main",
+           Angle.From == "sharp" ~ "Secondary",
+           Angle.From == "shallow" ~ "Primary"))
 ```
 
 # Visualization of real data
@@ -713,24 +717,37 @@ This is alright but not super intuitive, maybe not work pursuing.
 ```{r}
 angle_graph_data <- turn_choices_angle %>%
   ungroup() %>%
-  group_by(Direction.From, Junction.Handedness, Junction) %>%
+  group_by(Angle.From, Junction.Handedness, Junction) %>%
   select(isSharpTurn) %>%
   filter(Junction != 0) %>%
   summarize(Total = n(), Sharp = sum(isSharpTurn)) %>%
-  mutate(Level = case_when(
-    Junction < 10 ~ "1",
-    Junction >= 10 & Junction < 100 ~ "2",
-    Junction >= 100 & Junction < 1000 ~ "3",
-    Junction >= 1000 ~ "4"),
-    LogTotal = log(Total),
-    LogSharp = log(Sharp)
+  mutate(Junction = as.numeric(Junction),
+         Level = case_when(
+           Junction < 10 ~ "1",
+           Junction >= 10 & Junction < 100 ~ "2",
+           Junction >= 100 & Junction < 1000 ~ "3",
+           Junction >= 1000 ~ "4"),
+         LogTotal = log(Total + 1),
+         LogSharp = log(Sharp + 1),
+         Angle.From = case_when(
+           Angle.From == "main" ~ "Main",
+           Angle.From == "sharp" ~ "Secondary",
+           Angle.From == "shallow" ~ "Primary"
+         )
     )
 
 fixed_effects <- 
-  as.data.frame(effects::Effect(
+  as_tibble(effects::Effect(
     focal.predictors=c("Angle.From",
         "sharpIsLeft"), 
-    mod=angle_model_plus))
+    mod=angle_model_plus)) %>%
+  mutate(Angle.From = case_when(
+           Angle.From == "main" ~ "Main",
+           Angle.From == "sharp" ~ "Secondary",
+           Angle.From == "shallow" ~ "Primary"))
+
+angle_graph_data
+fixed_effects
 ```
 
 Join the fixed_effects data frame with approach.types to get them to match for more variable usage.
@@ -759,40 +776,114 @@ Plot the effects of angle_model_plus
 #df_angle <- as.data.frame(effects_angle)
 ```
 
+Non-transformed data visualization:
+
 ```{r}
-angle_graph_data %>%
-  ggplot() +
-  geom_point(mapping = aes(x = Total, y = Sharp)) +
-  geom_abline(slope=0.5,intercept=0,lty=2) +
-  geom_abline(data=angle_fit_data, slope=fit, intercept=0, color="blue")# +
-  #geom_ribbon(data= angle_fit_data, aes(x= Direction.From, ymin= lower, ymax= upper), alpha= 0.3, fill="blue") +
-  theme_minimal(base_size = 25)
+maxtotal <- max(angle_graph_data$Total)
+maxsharp <- max(angle_graph_data$Sharp)
+
+testribbon <- tibble(Junction.Handedness = c(rep(c(rep("LH",6),rep("RH",6)),1)),
+                     Angle.From= c(rep(c(rep("Main",2), rep("Primary",2), rep("Secondary",2)),2)),
+                     x = c(rep(c(0,maxtotal),6)),
+                     ymax = c(0,5,0,10,0,15,0,20,0,15,0,10),
+                     ymin = c(rep(c(0, 1),6))
+                     )
+testpolygon <- tibble(xu = c(0,0,maxtotal, maxtotal),
+                      yu = c(0,maxsharp,maxsharp,maxtotal/2),
+                      xl = c(0,0,maxtotal,maxtotal),
+                      yl = c(0,0,0,maxtotal/2))
+
+maxtrue <- max(maxtotal,maxsharp*2)
+
+testpolygon2 <- tibble(xu = c(0,0,maxtrue),
+                       yu = c(0,maxtrue/2,maxtrue/2),
+                       xl = c(0,maxtrue,maxtrue),
+                       yl = c(0,0,maxtrue/2))
+
+angle_ribbon_data_pre <- angle_fit_data %>%
+  mutate(yminf = lower * maxtotal, ymaxf = upper * maxtotal, x0 = 0, xf = maxtotal, ymin0 = 0, ymax0 = 0)
+
+angle_ribbon_data_x <- angle_ribbon_data_pre %>%
+  pivot_longer(cols = c(x0,xf), values_to = "x") %>%
+  select(Junction.Handedness, Angle.From, x)
+
+angle_ribbon_data_ymax <- angle_ribbon_data_pre %>%
+  pivot_longer(cols = c(ymax0,ymaxf), values_to = "ymax") %>%
+  select(ymax)
+
+angle_ribbon_data_ymin <- angle_ribbon_data_pre %>%
+  pivot_longer(cols = c(ymin0,yminf), values_to = "ymin") %>%
+  select(ymin)
+
+angle_ribbon_data <- bind_cols(angle_ribbon_data_x,angle_ribbon_data_ymax) %>%
+  bind_cols(angle_ribbon_data_ymin)
+
+angle_ribbon_data_pre2 <- angle_fit_data %>%
+  mutate(yminf = lower * maxtrue, ymaxf = upper * maxtrue, x0 = 0, xf = maxtrue, ymin0 = 0, ymax0 = 0)
+
+angle_ribbon_data_x2 <- angle_ribbon_data_pre2 %>%
+  pivot_longer(cols = c(x0,xf), values_to = "x") %>%
+  select(Junction.Handedness, Angle.From, x)
+
+angle_ribbon_data_ymax2 <- angle_ribbon_data_pre2 %>%
+  pivot_longer(cols = c(ymax0,ymaxf), values_to = "ymax") %>%
+  select(ymax)
+
+angle_ribbon_data_ymin2 <- angle_ribbon_data_pre2 %>%
+  pivot_longer(cols = c(ymin0,yminf), values_to = "ymin") %>%
+  select(ymin)
+
+angle_ribbon_data2 <- bind_cols(angle_ribbon_data_x2,angle_ribbon_data_ymax2) %>%
+  bind_cols(angle_ribbon_data_ymin2)
 ```
 
 
 ```{r}
 angle_graph_data %>%
   ggplot() +
+  facet_grid(cols = vars(Junction.Handedness), rows = vars(Angle.From)) +
   geom_point(mapping = aes(x = Total, y = Sharp)) +
-  geom_abline(slope=0.5,color = "blue", intercept=0) +
-  geom_abline(data=angle_fit_data, aes(slope = fit, intercept = 0), lty=2) +
-  geom_abline(data=angle_fit_data, aes(slope = upper, intercept = 0), lty = 3) +
-  geom_abline(data=angle_fit_data, aes(slope = lower, intercept = 0), lty = 3) +
-  facet_grid(rows = vars(Junction.Handedness), cols = vars(Direction.From)) +
-  theme_minimal(base_size = 25) +
-  labs(title = "Sharp Turns vs Total Turns", y = "Number of Sharp Turns", x = "Number of Total Turns")
-ggsave("images/Angle_Data_Visualization.png")
+  geom_abline(data=angle_fit_data, aes(slope = fit, intercept = 0),size = 1) +
+  geom_ribbon(data=angle_ribbon_data2, aes(x = x, ymin = ymin, ymax = ymax), alpha = .3) +
+  geom_polygon(data = testpolygon2, aes(x = xu, y = yu), alpha = .25, fill = "red") +
+  geom_polygon(data = testpolygon2, aes(x = xl, y = yl), alpha = .25, fill = "blue") +
+  theme_classic(base_size = 15) +
+  coord_cartesian(xlim = c(0,maxtrue), ylim = c(0, maxtrue/2)) +
+  labs(y = "Number of Sharp Turns", x = "Number of Total Turns")
+ggsave("images/Angle_Data_Visualization.png",dpi=300, width = 5, height = 7, units = "in")
 ```
 
+Testing zone for figure:
 
 ```{r}
 angle_graph_data %>%
   ggplot() +
-  geom_point(mapping = aes(x = LogTotal, y = LogSharp)) +
-  geom_abline(slope=1,intercept=log(.5),lty=2) +
-  geom_abline(data=angle_fit_data, aes(slope = 2*fit, intercept = log(.5)), color="blue", lty=2) +
-  geom_abline(data=angle_fit_data, aes(slope = 2*upper, intercept = log(.5)), color="blue", lty = 3) +
-  geom_abline(data=angle_fit_data, aes(slope = 2*lower, intercept = log(.5)), color="blue", lty = 3) +
+  facet_grid(cols = vars(Junction.Handedness), rows = vars(Angle.From)) +
+  #geom_abline(slope=0.5,color = "black", intercept=0, size=1) +
+  geom_point(mapping = aes(x = Total, y = Sharp)) +
+  geom_abline(data=angle_fit_data, aes(slope = fit, intercept = 0),size = 1) +
+  #geom_abline(data=angle_fit_data, aes(slope = upper, intercept = 0), lty = 2, size = .5) +
+  #geom_abline(data=angle_fit_data, aes(slope = lower, intercept = 0), lty = 2, size = .5) +
+  geom_ribbon(data=angle_ribbon_data2, aes(x = x, ymin = ymin, ymax = ymax), alpha = .3) +
+  geom_polygon(data = testpolygon2, aes(x = xu, y = yu), alpha = .25, fill = "red") +
+  geom_polygon(data = testpolygon2, aes(x = xl, y = yl), alpha = .25, fill = "blue") +
+  #geom_smooth(data = angle_graph_data, x = Total, y = Sharp, method="lm", color="black") +
+  theme_classic(base_size = 15) +
+  coord_cartesian(xlim = c(0,maxtrue), ylim = c(0, maxtrue/2)) +
+  labs(y = "Number of Sharp Turns", x = "Number of Total Turns")
+ggsave("images/Angle_Data_Visualization_Test.png",dpi=300, width = 5, height = 7, units = "in")
+```
+
+Defunct log data figure:
+
+```{r}
+angle_graph_data %>%
+  ggplot() +
+  geom_point(mapping = aes(x = LogTotal, y = LogSharp, color = Level)) +
+  geom_abline(slope=1,intercept=log(.5),color="blue") +
+  geom_abline(data=angle_fit_data, aes(slope = 2*fit, intercept = log(.5)), lty=2) +
+  geom_abline(data=angle_fit_data, aes(slope = 2*upper, intercept = log(.5)), lty = 3) +
+  geom_abline(data=angle_fit_data, aes(slope = 2*lower, intercept = log(.5)), lty = 3) +
   facet_grid(rows = vars(Junction.Handedness), cols = vars(Direction.From)) +
   theme_minimal(base_size = 20) +
   labs(title = "Log Sharp Turns vs Log Total Turns", y = "Log Number of Sharp Turns", x = "Log Number of Total Turns")
