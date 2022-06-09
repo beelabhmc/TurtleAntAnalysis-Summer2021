@@ -117,9 +117,9 @@ movement <- movement %>%
   # next junction it visited, unless that information was given
   # in the Exited.Toward column
   mutate(Node.From=lag(Junction),Node.To=lead(Junction)) %>%
-  mutate(Node.From=replace_na(Node.From,-1)) %>% 
+  mutate(Node.From=replace_na(Node.From,"-1")) %>% 
   mutate(Node.To=if_else(is.na(Exited.Toward),Node.To,Exited.Toward)) %>%
-  mutate(Node.To=replace_na(Node.To,-1)) %>% 
+  mutate(Node.To=replace_na(Node.To,"-1")) %>% 
   mutate(Entered.From=lag(Exited.Toward))  %>%
   mutate(Node.From=if_else(is.na(Entered.From),Node.From,Entered.From))
 ```
@@ -689,11 +689,25 @@ approach.types$Predictions <- predict(
   re.form=NA, # this says ignore random effects in the predictions
   type="response" # this says convert output to probabilities
 )
-approach.types <- approach.types %>%
-  mutate(Angle.From = case_when(
-           Angle.From == "main" ~ "Main",
-           Angle.From == "sharp" ~ "Secondary",
-           Angle.From == "shallow" ~ "Primary"))
+# approach.types <- approach.types %>%
+#   mutate(Angle.From = case_when(
+#            Angle.From == "main" ~ "Main",
+#            Angle.From == "sharp" ~ "Secondary",
+#            Angle.From == "shallow" ~ "Primary"))
+```
+
+We can use this model to generate predictions for all turns, based just on the direction of approach and which side has the sharper turn. To do this, we need to join the table containing turns for all junctions (`turns`) with the table containing the predictions based on these factors (`approach.types`).
+
+```{r}
+turn_predictions <- left_join(turns, approach.types)
+turn_predictions <- turn_predictions %>%
+  rename(Sharp.Turn.Probability = Predictions) %>%
+  mutate(Turn.Probability = case_when(isSharpTurn=="TRUE" ~
+                                        Sharp.Turn.Probability,
+                                      isSharpTurn=="FALSE" ~
+                                        1-Sharp.Turn.Probability))
+write.csv(turn_predictions, "data/NetworksSummer2021-TurnPredictions.csv",
+          row.names=F)
 ```
 
 # Visualization of real data
@@ -728,23 +742,23 @@ angle_graph_data <- turn_choices_angle %>%
            Junction >= 100 & Junction < 1000 ~ "3",
            Junction >= 1000 ~ "4"),
          LogTotal = log(Total + 1),
-         LogSharp = log(Sharp + 1),
-         Angle.From = case_when(
-           Angle.From == "main" ~ "Main",
-           Angle.From == "sharp" ~ "Secondary",
-           Angle.From == "shallow" ~ "Primary"
-         )
+         LogSharp = log(Sharp + 1)#,
+         # Angle.From = case_when(
+         #   Angle.From == "main" ~ "Main",
+         #   Angle.From == "sharp" ~ "Secondary",
+         #   Angle.From == "shallow" ~ "Primary"
+         # )
     )
 
 fixed_effects <- 
   as_tibble(effects::Effect(
     focal.predictors=c("Angle.From",
         "sharpIsLeft"), 
-    mod=angle_model_plus)) %>%
-  mutate(Angle.From = case_when(
-           Angle.From == "main" ~ "Main",
-           Angle.From == "sharp" ~ "Secondary",
-           Angle.From == "shallow" ~ "Primary"))
+    mod=angle_model_plus)) #%>%
+  # mutate(Angle.From = case_when(
+  #          Angle.From == "main" ~ "Main",
+  #          Angle.From == "sharp" ~ "Secondary",
+  #          Angle.From == "shallow" ~ "Primary"))
 
 angle_graph_data
 fixed_effects
