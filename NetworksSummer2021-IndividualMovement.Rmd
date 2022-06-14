@@ -14,6 +14,7 @@ require(tidyr)
 require(ggthemes)
 require(grDevices)
 require(lme4)
+require(bbmle) #for AICtab
 ```
 
 ## Hypotheses / Questions
@@ -591,6 +592,7 @@ turns <- turns %>%
       #Junction==111 & Turn.Type=='R' ~ "sharp",
       #Junction==221 & Turn.Type=='L' ~ "sharp",
       #Junction==221 & Turn.Type=='R' ~ "shallow")) %>%
+    isUTurn = Turn.Type=="U",
     isSharpTurn = Turn.Angle == "sharp",
     sharpIsLeft = case_when(
       Direction.From=='main' & Junction.Handedness=="LH" ~ TRUE,
@@ -684,7 +686,7 @@ approach.types <- turn_choices_angle %>%
   distinct() %>%
   arrange(Angle.From, sharpIsLeft)
 # use the table to make predictions from the model
-approach.types$Predictions <- predict(
+approach.types$Sharp.Turn.Prob <- predict(
   angle_model_plus, newdata=approach.types, 
   re.form=NA, # this says ignore random effects in the predictions
   type="response" # this says convert output to probabilities
@@ -696,21 +698,7 @@ approach.types$Predictions <- predict(
 #            Angle.From == "shallow" ~ "Primary"))
 ```
 
-We can use this model to generate predictions for all turns, based just on the direction of approach and which side has the sharper turn. To do this, we need to join the table containing turns for all junctions (`turns`) with the table containing the predictions based on these factors (`approach.types`).
-
-```{r}
-turn_predictions <- left_join(turns, approach.types)
-turn_predictions <- turn_predictions %>%
-  rename(Sharp.Turn.Probability = Predictions) %>%
-  mutate(Turn.Probability = case_when(isSharpTurn=="TRUE" ~
-                                        Sharp.Turn.Probability,
-                                      isSharpTurn=="FALSE" ~
-                                        1-Sharp.Turn.Probability))
-write.csv(turn_predictions, "data/NetworksSummer2021-TurnPredictions.csv",
-          row.names=F)
-```
-
-# Visualization of real data
+## Visualization of turning angle bias data
 
 Here are a couple of ideas for visualization (not mutually exclusive):
 
@@ -718,14 +706,7 @@ Here are a couple of ideas for visualization (not mutually exclusive):
 
 2. For each of the six combinations of `Angle.From` and `Junction.Handedness`, draw colored arrows (approach, sharp turn, shallow turn) on top of a diagram of the junction, showing the direction of approach and each of the two turns. The width of each arrow should be proportional to the number of ants that approached or turned, summed across all junctions in the category and you can write the actual number next to it or inside it.
 
-```{r}
-#sjPlot::plot_model(angle_model_plus,
-#                   show.re.var= TRUE, 
-#                   pred.labels =c("(Intercept)", "from shallow", "from sharp", "sharp is left"),
-#                   dv.labels= "test")
-```
-
-This is alright but not super intuitive, maybe not work pursuing.
+Here we'll create the first plot. 
 
 
 ```{r}
@@ -867,42 +848,7 @@ angle_graph_data %>%
 ggsave("images/Angle_Data_Visualization.png",dpi=300, width = 5, height = 7, units = "in")
 ```
 
-Testing zone for figure:
-
-```{r}
-angle_graph_data %>%
-  ggplot() +
-  facet_grid(cols = vars(Junction.Handedness), rows = vars(Angle.From)) +
-  #geom_abline(slope=0.5,color = "black", intercept=0, size=1) +
-  geom_point(mapping = aes(x = Total, y = Sharp)) +
-  geom_abline(data=angle_fit_data, aes(slope = fit, intercept = 0),size = 1) +
-  #geom_abline(data=angle_fit_data, aes(slope = upper, intercept = 0), lty = 2, size = .5) +
-  #geom_abline(data=angle_fit_data, aes(slope = lower, intercept = 0), lty = 2, size = .5) +
-  geom_ribbon(data=angle_ribbon_data2, aes(x = x, ymin = ymin, ymax = ymax), alpha = .3) +
-  geom_polygon(data = testpolygon2, aes(x = xu, y = yu), alpha = .25, fill = "red") +
-  geom_polygon(data = testpolygon2, aes(x = xl, y = yl), alpha = .25, fill = "blue") +
-  #geom_smooth(data = angle_graph_data, x = Total, y = Sharp, method="lm", color="black") +
-  theme_classic(base_size = 15) +
-  coord_cartesian(xlim = c(0,maxtrue), ylim = c(0, maxtrue/2)) +
-  labs(y = "Number of Sharp Turns", x = "Number of Total Turns")
-ggsave("images/Angle_Data_Visualization_Test.png",dpi=300, width = 5, height = 7, units = "in")
-```
-
-Defunct log data figure:
-
-```{r}
-angle_graph_data %>%
-  ggplot() +
-  geom_point(mapping = aes(x = LogTotal, y = LogSharp, color = Level)) +
-  geom_abline(slope=1,intercept=log(.5),color="blue") +
-  geom_abline(data=angle_fit_data, aes(slope = 2*fit, intercept = log(.5)), lty=2) +
-  geom_abline(data=angle_fit_data, aes(slope = 2*upper, intercept = log(.5)), lty = 3) +
-  geom_abline(data=angle_fit_data, aes(slope = 2*lower, intercept = log(.5)), lty = 3) +
-  facet_grid(rows = vars(Junction.Handedness), cols = vars(Direction.From)) +
-  theme_minimal(base_size = 20) +
-  labs(title = "Log Sharp Turns vs Log Total Turns", y = "Log Number of Sharp Turns", x = "Log Number of Total Turns")
-ggsave("images/Log_Angle_Data_Visualization.png")
-```
+Here is a table of the total turns in each category to be used in creating the second figure.
 
 ```{r}
 turn_choices_angle %>%
@@ -912,3 +858,101 @@ turn_choices_angle %>%
   summarize(Total = n(), Sharp = sum(isSharpTurn))
 ```
 
+### Do ants have U-turn bias?
+
+We would like to know whether ants choose whether to make a U-turn based on the turning angles available to them. If ants are more likely to take a U-turn at certain types of junctions, coming from certain directions, this could induce an overall bias in their paths.
+
+To determine this, we will ask how likely it is for ants to make a U-turn overall, and whether this probability depends on:
+
+1. Whether the sharper turn is on the left side or the right side
+
+1. The direction the ant approaches the junction from: the main branch (main), the thinner more angled offshoot (sharp), or the thicker less angled offshoot (shallow)
+
+That is, we will use exactly the same explanatory variables as in the turning angle model, but here change the response variable to be whether they made a U-turn or not. First we create the data frame with all the additional variables about the turning context from before, but this time we include the U-turns.
+
+```{r}
+turn_choices_u <- turn_choices %>%
+  left_join(select(
+    turns, Node.From, Node.To, Turn.Angle, Angle.From, isUTurn, sharpIsLeft, Junction.Handedness), 
+    by=c("Node.From", "Node.To")) %>%
+  filter(Num.Inspections==0,Ant.In.Pair=="A")
+```
+
+Now we can analyze the turn choices made. We use logistic regression (a binomial generalized linear mixed effects model) to create a model of whether the ant makes a U-turn at each junction. To begin with we look at the null model, which tells us overall what the chance of making a U-turn is.
+
+```{r}
+null_model_u <- glmer(
+  isUTurn ~ (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_u)
+sjPlot::tab_model(null_model_u)
+```
+
+This shows that the odds ratio of making a U-turn is about 0.22 across all junction types (out of 122 turns, 22 will be U-turns). Now let's see if that ratio is influenced by anything else. We'll try various combinations of (1) whether the sharp turn is on the left (`sharpIsLeft`), and (2) whether the ant is approaching from the main branch (`Angle.From`="main"), the primary branch, which is thicker and less angled away from the main (`Angle.From`="shallow"), or the secondary branch, which is thinner and more angled away from the main (`Angle.From`="shallow"). We can compare models using AIC (the Akaike Information Criterion) to decide which one best explains the observations without fitting too many unnecessary parameters.
+
+```{r}
+# We'll try several models
+
+leftright_model_u <- glmer(
+  isUTurn ~ sharpIsLeft + (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_u)
+angle_model_u <- glmer(
+  isUTurn ~ Angle.From + (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_u)
+angle_model_plus_u <- glmer(
+  isUTurn ~ Angle.From + sharpIsLeft + (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_u)
+angle_model_star_u <- glmer(
+  isUTurn ~ Angle.From * sharpIsLeft + (1|Colony:Ant.ID), 
+  family = binomial, turn_choices_u)
+
+# Which model is best?
+AICtab(null_model_u,
+       angle_model_u,
+       leftright_model_u,
+       angle_model_plus_u,
+       angle_model_star_u)
+
+sjPlot::tab_model(angle_model_u)
+```
+This shows that the angle model is the best one; only the direction of approach influences the chance of a U-turn. We also see that each of the three directions has a successively lower chance of U-turn. The odds ratio for ants coming from the main branch is one-third, for those coming from the primary branch it's even smaller, and for those coming from the secondary branch it's even smaller.
+
+To interpret the model, let's look at the estimates for the coefficients for the fixed effect (which direction the ant is coming from). We can also use the model to make predictions for each possible approach.
+
+```{r}
+# use the table to make predictions from the model
+approach.types$U.Turn.Prob <- predict(
+  angle_model_u, newdata=approach.types, 
+  re.form=NA, # this says ignore random effects in the predictions
+  type="response" # this says convert output to probabilities
+)
+# approach.types <- approach.types %>%
+#   mutate(Angle.From = case_when(
+#            Angle.From == "main" ~ "Main",
+#            Angle.From == "sharp" ~ "Secondary",
+#            Angle.From == "shallow" ~ "Primary"))
+approach.types %>% select(Angle.From, Junction.Handedness, sharpIsLeft,
+                          Sharp.Turn.Prob, U.Turn.Prob)
+```
+
+We can use this model to generate predictions for all turns, based just on the direction of approach. To do this, we need to join the table containing turns for all junctions (`turns`) with the table containing the predictions based on these factors (`approach.types`).
+
+```{r}
+turn_predictions <- left_join(turns, approach.types)
+turn_predictions <- turn_predictions %>%
+  mutate(Turn.Probability = case_when(isUTurn=="TRUE" ~
+                                        U.Turn.Prob,
+                                      isSharpTurn=="TRUE" ~
+                                        (1-U.Turn.Prob)*Sharp.Turn.Prob,
+                                      isSharpTurn=="FALSE" ~
+                                        (1-U.Turn.Prob)*(1-Sharp.Turn.Prob)))
+write.csv(turn_predictions, "data/NetworksSummer2021-TurnPredictions.csv",
+          row.names=F)
+```
+
+Let's double check to make sure that the probabilities make sense: for every approach (the node it came from, and the node it's at), the sum of the turn probabilities (three different nodes it could go to) should be 1.
+
+```{r}
+turn_predictions %>%
+  group_by(Node.From,Junction) %>%
+  summarize(Total.Prob=sum(Turn.Probability))
+```
