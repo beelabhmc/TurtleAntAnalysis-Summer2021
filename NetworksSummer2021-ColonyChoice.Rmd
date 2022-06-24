@@ -1,0 +1,235 @@
+---
+title: "Networks Summer 2021 - Colony Choice"
+author: "Matina Donaldson-Matasci"
+date: "6/15/2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+require(tidyverse)
+require(lubridate)
+require(glmmTMB)
+require(sjPlot)
+theme_set(theme_test(base_size=18))
+
+nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
+names(nest.palette) = c("A2","B3","C1","D2","E1","F1","G1","H1")
+```
+
+# Ant Networks Experiments Summer 2021: Colony Choice
+
+## Hypotheses / Questions
+
+In a modular, artificial tree branch populated with 8 nests, which nest(s) will colonies preferentially move into? Nest properties (volume, entrance size, darkness, etc.) are identical but the locations differ. All nests are equidistant from the colony's access point, but the geometry of the junctions and branches they must navigate differ. 
+
+Hypotheses:
+
+1. Colonies choose nests on thicker branches
+
+1. Colonies choose nests closer to the trunk
+
+1. Colonies choose nests according to individual encounter rate
+
+For each of these hypotheses, we can make two predictions: one about which nests will contain more ants in the final post-experiment census, and another about which nests will become populated first in the daily experiment checks.
+
+## Data Description
+
+To test these hypotheses, we'll need three different sets of data: (1) the colony experiment full census, (2) the colony experiment daily checks, and (3) the frequency with which individual ants visited each of the nests in the individual experiments.
+
+First, let's load in the full census data. This contains counts and locations of all ants before and after each experiment.
+
+```{r}
+census <- read.csv("data/NetworksSummer2021-ColonyChoice-FullCensus.csv",
+                   colClasses=c("Colony.Name"="factor",
+                                  "When"="factor",
+                                  "Nest"="character"),
+                                na.strings="NA")
+census <- census %>%
+  dplyr::select(-starts_with("X")) %>%
+  mutate(Date=mdy(Date)) %>%
+  mutate(Brood=if_else(Brood=="y",T,F)) %>%
+  mutate(Nest=if_else(Nest=="2111","2112",Nest)) %>% # mislabeling of nest
+  mutate(Nest.Label=as.numeric(Nest)) %>%
+  mutate(Nest.Label=factor(Nest.Label,
+                          levels=c("321","72","1112","1221","412",
+                           "82","2112","2212"))) %>%
+  rename(Census.Location=Nest) %>%
+  filter(When=="post")
+```
+
+We want to join this with information about each nest.
+
+```{r}
+tips <- read.csv("data/NetworksSummer2021-TipReference.csv",
+                 colClasses=c("Tip"="character", "Type"="factor",
+                      "Location"="factor", "Distance.from.Trunk"="numeric"),
+                 na.strings="")
+
+census <- census %>% left_join(tips,by=c("Nest.Label"="Tip")) %>%
+  rename("Nest.Location"="Location") %>%
+  mutate(Branch.Level=str_length(Nest.Label))
+```
+
+Let's take a look at the number of ants in each nest after each of the colony choice experiments.
+
+```{r}
+census %>% 
+  filter(!is.na(Nest.Label)) %>%
+  ggplot(aes(x=Nest.Location,y=Workers,fill=Nest.Location)) + 
+  geom_col() +
+  scale_fill_manual(values=nest.palette,drop=F) +
+#  scale_y_log10() +
+  facet_grid(Colony.Name~.) + 
+  xlab("Nest Location") + ylab("Number of workers") +
+  labs(fill="Nest Location")  +
+  labs(title = "Nest Choice (Colony Experiment)") +
+  theme(legend.position="none",plot.title = element_text(hjust = 0.5))
+ggsave("images/ColonyChoice-NumWorkers-POSTER.png", 
+       dpi=300, width = 8, height = 5, units = "in")
+```
+Next, let's load in the daily checks of each nest during the experiment. This contains a qualitative assessment of the number of ants in each nest periodically during each colony choice experiment.
+
+```{r}
+daily <- read.csv("data/NetworksSummer2021-ColonyChoice-DailyChecks.csv",
+                   colClasses=c("Colony"="factor",
+                                "Nest"="character"),
+                                na.strings=c("NA",""))
+daily <- daily %>%
+  fill(Date,Experiment.Day,Time) %>%
+  mutate(Datetime=mdy_hm(paste(Date,Time))) %>%
+  mutate(Date=mdy(Date)) %>%
+  mutate(Experiment.Time=days(Experiment.Day)+hm(Time)) %>%
+  dplyr::select(-Time) %>%
+  rename_with(~gsub('\\.\\..*','',.x)) %>%
+  rename(Nest.Label=Nest) %>%
+  mutate(Nest.Label=if_else(Nest.Label=="2111","2112",Nest.Label)) %>% # mislabeling of nest
+  mutate(Number.of.ants=factor(tolower(Number.of.ants), 
+                               levels=c("none","few","many"))) %>%
+  mutate(Nest.Label=factor(Nest.Label,
+                          levels=c("321","72","1112","1221","412",
+                           "82","2112","2212"))) %>%
+  mutate(Brood=case_when(Brood=="y" ~ T,
+                         Brood=="n" ~ F,
+                         TRUE ~ F)) %>%
+  mutate(Queen=case_when(Queen=="y" ~ T,
+                       Queen=="n" ~ F,
+                       TRUE ~ F))
+
+daily <- daily %>% left_join(tips,by=c("Nest.Label"="Tip")) %>%
+  rename("Nest.Location"="Location") %>%
+  mutate(Branch.Level=str_length(Nest.Label))
+```
+
+```{r}
+daily %>% 
+  ggplot(aes(x=as.numeric(Experiment.Time,"days"),
+             y=Nest.Location, color=Nest.Location,
+             size=Number.of.ants)) + 
+  geom_line() +
+  scale_color_manual(values=nest.palette,drop=F) +
+  scale_size_manual(values=c(0,0.25,1.5)) +
+  facet_grid(Colony~.) +
+  theme(axis.text.y = element_blank(), axis.ticks= element_blank()) +
+  xlab("Day of Experiment") +
+  ylab("Nest Location") +
+  labs(title = "Nest Occupation (Colony Experiment)") +
+  labs(color="Nest Location", size="Number of ants")
+ggsave("images/ColonyChoice-DailyCheck-POSTER.png", 
+       dpi=300, width = 8, height = 5, units = "in")
+```
+
+## Do colonies show a preference for specific nests?
+
+Next, let's create a model to look for a preference for specific nests. The first is based on the number of workers per nest. This shows that the highest numbers of workers were observed in nests B3 (mean 48, 95% CI 14--162) and F1 (mean 8, 95% CI 2--30).
+
+```{r}
+model.workers.bynest <- glmmTMB(Workers ~ Nest.Location + 
+                          (1|Colony.Name) -1,
+                        family="nbinom2", data=census)
+
+summary(model.workers.bynest)
+sjPlot::tab_model(model.workers.bynest)
+```
+
+Let's also check for a preference in how often those nests were heavily occupied during the daily checks. This shows that again, nest B3 was most likely to be occupied by many ants (odds ratio 13.0, 95% CI 2.6-63.1), with nest F1 being the second most likely (odds ratio 1.1, 95% CI 0.3--4.4).
+
+```{r}
+model.daily.bynest <- glmmTMB(Number.of.ants=="many" ~ Nest.Location + 
+                          (1|Colony) - 1,
+                        family="binomial", data=daily)
+
+summary(model.daily.bynest)
+sjPlot::tab_model(model.daily.bynest)
+```
+
+
+## Do colonies move more ants into nests on thicker branches?
+
+First, I'll replot the data with a reordering of the nests in terms of total occupation.
+
+```{r}
+census %>% 
+  filter(!is.na(Nest.Label)) %>%
+  ggplot(aes(x=reorder(Nest.Location,Branch.Level),y=Workers,fill=Nest.Location)) + 
+  geom_col() +
+  scale_fill_manual(values=nest.palette,drop=F) +
+  facet_grid(Colony.Name~.) + 
+  xlab("Nest Location") + ylab("Number of workers") +
+  labs(fill="Nest Location")
+```
+
+
+## Do colonies populate nests on thicker branches more quickly?
+
+```{r}
+daily %>% 
+  ggplot(aes(x=as.numeric(Experiment.Time,"days"),
+             y=reorder(Nest.Location,Branch.Level),
+             color=reorder(Nest.Location,Branch.Level),
+             size=Number.of.ants)) + 
+  geom_line() +
+  scale_color_manual(values=nest.palette,drop=F) +
+  scale_size_manual(values=c(0,0.25,1.5)) +
+  facet_grid(Colony~.) +
+  theme(axis.text.y = element_blank(), axis.ticks= element_blank()) +
+  xlab("Day of Experiment") +
+  ylab("Nest Location") +
+  labs(color="Nest Location", size="Number of ants")
+```
+
+## Do colonies move more ants into nests close to the trunk?
+
+```{r}
+census %>% 
+  filter(!is.na(Nest.Label)) %>%
+  ggplot(aes(x=reorder(Nest.Location,Distance.from.Trunk),y=Workers,fill=Nest.Location)) + 
+  geom_col() +
+  scale_fill_manual(values=nest.palette,drop=F) +
+  facet_grid(Colony.Name~.) + 
+  xlab("Nest Location") + ylab("Number of workers") +
+  labs(fill="Nest Location")
+```
+
+## Do colonies populate nests near the trunk more quickly?
+
+```{r}
+daily %>% 
+  ggplot(aes(x=as.numeric(Experiment.Time,"days"),
+             y=reorder(Nest.Location,Distance.from.Trunk),
+             color=reorder(Nest.Location,Distance.from.Trunk),
+             size=Number.of.ants)) + 
+  geom_line() +
+  scale_color_manual(values=nest.palette,drop=F) +
+  scale_size_manual(values=c(0,0.25,1.5)) +
+  facet_grid(Colony~.) +
+  theme(axis.text.y = element_blank(), axis.ticks= element_blank()) +
+  xlab("Day of Experiment") +
+  ylab("Nest Location") +
+  labs(color="Nest Location", size="Number of ants")
+```
+
+## Do colonies move more ants into nests with a higher individual encounter rate?
+
+## Do colonies populate nests with a higher individual encounter rate more quickly?
+
+
