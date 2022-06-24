@@ -2,19 +2,28 @@
 title: "Individual Movement Analysis"
 author: "Matina Donaldson-Matasci"
 date: "10/11/2021"
-output: html_document
+output:
+  html_document: default
+  word_document: default
+  pdf_document: default
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 require(ggplot2)
-theme_set(theme_minimal())
 require(dplyr)
 require(tidyr)
 require(ggthemes)
 require(grDevices)
 require(lme4)
+require(glmmTMB)
 require(bbmle) #for AICtab
+
+theme_set(theme_test(base_size=18))
+
+nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
+nest.names <- c("A2","B3","C1","D2","E1","F1","G1","H1")
+names(nest.palette) = nest.names
 ```
 
 ## Hypotheses / Questions
@@ -39,11 +48,13 @@ Here is the table of junction entry/exit points, which we will call branches. We
 
 ```{r}
 branches <- read.csv("data/NetworksSummer2021-JunctionReference.csv",
-                     colClasses=c("Junction"="character","Direction"="factor",
-                                  "Width"="numeric", "Leads.to.Node"="character"),
+                     colClasses=c("Junction"="character",
+                                  "Direction"="factor",
+                                  "Width"="numeric",
+                                  "Leads.to.Node"="character"),
                      na.strings="")
 branches <- branches %>%
-  select(Junction, Direction, Width, Leads.to.Node)
+  dplyr::select(Junction, Direction, Width, Leads.to.Node)
 head(branches)
 branches %>% summarize(num_junctions=n_distinct(Junction))
 branches %>% group_by(Junction) %>% summarize(num_branches=n())
@@ -51,7 +62,7 @@ branches %>% group_by(Width) %>% summarize(num_branches=n())
 branches %>% group_by(Junction) %>% summarize(num_widths=n_distinct(Width))
 ```
 
-Now we want to create a table of turns. This consists of a sequence of two things: entering a junction from one branch, and exiting it along (potentially) another branch That is, for each junction, we want all combinations of branches. To do this, we use a full join, based on the junction. For each turn, we then specify whether it is a left turn or a right turn, based on the entry and exit direction.
+Now we want to create a table of turns. This consists of a sequence of two things: entering a junction from one branch, and exiting it along (potentially) another branch. That is, for each junction, we want all combinations of branches. To do this, we use a full join, based on the junction. For each turn, we then specify whether it is a left turn or a right turn, based on the entry and exit direction.
 
 This action is then carried out with narrow and wide junction decisions as well.
 
@@ -77,7 +88,8 @@ turns <- turns %>%
 turns <- turns %>%
   mutate(Turn.Width = if_else(Node.From == Node.To, NA_character_,case_when(
     Rel.Width.From=="wide" & Rel.Width.To=="narrow" ~ "N",
-    Rel.Width.From=="wide" & Rel.Width.To=="wide" ~ "W")))
+    Rel.Width.From=="wide" & Rel.Width.To=="wide" ~ "W",
+    Rel.Width.From=="narrow" ~ "=")))
 
 turns <- turns %>%
   mutate(Turn.Trunk = if_else(Direction.From == Direction.To, NA_character_,case_when(
@@ -97,7 +109,7 @@ Finally, we want to join our data on individual movement between junctions with 
 movement <- read.csv("data/NetworksSummer2021-IndividualMovement.csv",
                      colClasses="character", na.strings="")
 movement <- movement %>%
-  select(Date, Colony, Ant.ID, Time, Junction, 
+  dplyr::select(Date, Colony, Ant.ID, Time, Junction, 
          Entered.From, Exited.Toward, Action..inspect.ignore.) %>%
   mutate(Colony=factor(Colony),Ant.ID=factor(Ant.ID)) %>%
   group_by(Colony,Ant.ID) %>%
@@ -137,406 +149,84 @@ Besides the turns they made at each junction, we also want to analyze which tips
 
 ```{r}
 tips <- read.csv("data/NetworksSummer2021-TipReference.csv",
-                 colClasses=c("Tip"="character","Type"="factor"),
+                 colClasses=c("Tip"="character","Type"="factor",
+                              "Location"="factor",
+                              "Distance.from.Trunk"="numeric"),
                  na.strings="")
 
 movement <- movement %>%
   group_by(Colony,Ant.ID) %>%
   mutate(Num.Nodes.Passed=row_number())
 
-tip_visits <- inner_join(movement,tips,by=c("Junction"="Tip")) 
+tip_visits <- inner_join(movement,tips,by=c("Junction"="Tip")) %>%
+  rename("Tip.Location"="Location")
 
 write.csv(tip_visits,file="data/NetworksSummer2021-TipVisits.csv")
 ```
 
 ## Data analysis
 
-### Are they more likely to take left or right turns?
-
-Let's make a plot showing each ant's left vs. right turns. We want to include only turns on the way to a nest or food, because if we include both directions any initial bias while searching might be canceled out by the ant making its way back. We also want to include only the first ant in the pair, because the second ant may be influenced by the first ant's choices. If there is no bias, we expect a regression line of the number of right turns on the total number of turns (left or right) to have a slope of 1/2 (we want to force it to have an intercept of 0).
-
-```{r}
-turn_choices_by_ant <- turn_choices %>% 
-  group_by(Colony,Ant.ID) %>%
-  filter(Num.Inspections==0) %>%
-  filter(Ant.In.Pair=="A") %>%
-  summarize(num_turns=n(), 
-            left_turns=sum(Turn.Type=="L",na.rm=T), 
-            right_turns=sum(Turn.Type=="R",na.rm=T), 
-            total_turns=right_turns+left_turns) %>%
-  ungroup()
-
-right.model <- lm(right_turns ~ total_turns + 0,
-                  data=turn_choices_by_ant)
-no.bias.model <- lm(right_turns ~ offset(0.5*total_turns)+0, 
-                    data=turn_choices_by_ant)
-summary(right.model)
-anova(right.model,no.bias.model)
-```
-
-Comparing the fitted model with a model of known slope (=0.5) shows that the outgoing ants do have a slight right bias, with a 59.5% chance of turning right. Here is a plot to illustrate it:
-
-```{r}
-max_turns <- max(turn_choices_by_ant$total_turns)
-ggplot(turn_choices_by_ant, aes(x=total_turns,y=right_turns)) + 
-  geom_point(aes(color=Colony)) + 
-  geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
-  geom_abline(slope=0.5,intercept=0,lty=2) + 
-  xlab("Total number of turns") + ylab("Number of right turns") +
-  xlim(0,max_turns) +
-  theme_minimal(base_size = 25)
-ggsave("images/RightvsTotalTurns.png", 
-       dpi=300, width = 8, height = 5, units = "in")
-```
-
-How often do they U-turn at a junction? Approximately 9.5% of the time.
-
-```{r}
-table(turn_choices$Turn.Type)/sum(table(turn_choices$Turn.Type))
-```
-
-In particular, we would like to know which way they turn at the first junction they meet. We'll again just look at the first ant in each pair, and only at their first choice when they arrive at the junction.
-
-```{r}
-first_turns <- turn_choices %>% 
-  filter(Junction=="0",Direction.From=="right",
-         Direction.To %in% c("main","left")) %>% 
-  filter(Ant.In.Pair=="A") %>% 
-  group_by(Colony,Ant.ID) %>% 
-  summarize(Turn.Type=first(Turn.Type)) %>% 
-  group_by(Turn.Type) %>% 
-  summarize(num=n())
-first_turns
-
-binom.test(first_turns$num)
-```
-
-This shows something of a left bias at that first junction: 19 out of 31 turns were to the left. This seems contrary to the general right bias and suggests that the right bias could be affected (or even produced) by branching geometry. However, the proportion of left turns is not significantly different from 50%.
-
 ### Which nests are they most likely to visit?
 
-Of the eight different nests, which one are the ants most likely to visit first? We filter out only visits to nests, and then take the first one for each ant. The plot shows that many ants visited nest 72 first, closely followed by 321.
+Of the eight different nests, which one are the ants most likely to visit first? We filter out only visits to nests, and then take the first one for each ant. The plot shows that many ants visited nests A2 and B3 first.
 
 ```{r}
-
-
 first_nest_visits <- tip_visits %>%
   filter(Type=="nest") %>%
   group_by(Colony,Ant.ID) %>%
-  summarize(Junction=first(Junction),Num.Nodes.Passed=first(Num.Nodes.Passed))
+  summarize(Nest.Location=factor(first(Tip.Location),levels=nest.names),
+            Junction=first(Junction),
+            Num.Nodes.Passed=first(Num.Nodes.Passed))
 
-first_nest_visits <- first_nest_visits %>%
-  mutate(Nest=factor(Junction,
-                  levels=c("321","72","1112","1221","412",
-                           "82","2112","2212")))
-nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
-ggplot(first_nest_visits, aes(x=Nest,fill=Nest)) + 
+ggplot(first_nest_visits, aes(x=Nest.Location,fill=Nest.Location)) + 
   geom_bar() + ylim(0,14) +
   scale_fill_manual(values=nest.palette,drop=F) +
   scale_x_discrete(drop=F) +
-  #scale_fill_tableau(palette = "Tableau 10") +
-  xlab("Nest Number") + 
+  xlab("Nest Location") + 
   ylab("Number of ants reaching this nest first") +
-  theme(legend.position="none")
-ggsave("images/FirstNestVisits-NumAnts.png", 
-       dpi=300, width = 5, height = 3, units = "in")
-```
-
-Here is another version of the same graph with different labeling for the poster.
-
-```{r}
-first_nest_visits_POSTER <- first_nest_visits %>%
-  mutate(Poster.Nest= case_when(
-    Nest == 321 ~ "A2",
-    Nest == 72 ~ "B3",
-    Nest == 1112 ~ "C1",
-    Nest == 1221 ~ "D2",
-    Nest == 412 ~ "E1",
-    Nest == 82 ~ "F1",
-    Nest == 2112 ~ "G1",
-    Nest == 2212 ~ "H1"
-  ))
-
-nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
-ggplot(first_nest_visits_POSTER, aes(x=Poster.Nest,fill=Poster.Nest)) + 
-  geom_bar() + ylim(0,14) +
-  scale_fill_manual(values=nest.palette,drop=F) +
-  scale_x_discrete(drop=F) +
-  #scale_fill_tableau(palette = "Tableau 10") +
-  xlab("Nest Name") + 
-  ylab("First nest visits") +
-  labs(title = "Nest Discovery (Individual)") +
-  theme_minimal(base_size = 25) +
-  theme(legend.position="none")
+  labs(title = "Nest Discovery (Individual Experiments)") +
+  theme(legend.position="none",plot.title = element_text(hjust = 0.5))
 ggsave("images/FirstNestVisits-NumAnts-POSTER.png", 
        dpi=300, width = 8, height = 5, units = "in")
 ```
 
+Is there a significant preference for particular nests over others? We can do a chi-squared goodness of fit test to test the null hypothesis that ants are equally likely to reach all 8 nests first. Assumptions are: (1) independence of observations, and (2) no more than 20% of the expected values in each cell are less than 5. Here we have a total of 46 observations in 8 categories, so the expected value for each cell is 5.75.
+
+```{r}
+chisq.test(table(first_nest_visits$Nest.Location))
+```
+
+This shows that there is a significant preference for certain nests over others (chi-squared goodness of fit, X2=27.7, df=7, p=0.0002).
+
 We also would like to know how direct their route to get there was. If they take a direct route, this will be easier to reinforce with pheromone. To figure this out, we plot the number of nodes each ant passed along the way to the first nest they visited. The shortest possible path is 6 nodes long, because that is the distance from the entry point to each tip.
 
 ```{r}
-ggplot(first_nest_visits, aes(x=Nest,
+ggplot(first_nest_visits, aes(x=Nest.Location,
                               y=Num.Nodes.Passed)) + 
-  geom_boxplot(aes(fill=Nest)) + 
+  geom_boxplot(aes(fill=Nest.Location)) + 
   geom_jitter(height=0,width=0.15) +
   scale_fill_manual(values=nest.palette,drop=F) +
-  #scale_color_manual(values=palette.colors(n = 8, palette = "Classic Tableau")) +
   scale_x_discrete(drop=F) +
-  #scale_color_tableau(palette = "Tableau 10") +
-  #scale_fill_tableau(palette = "Tableau 10") +
   geom_abline(slope=0,intercept=6,lty=2) +
   xlab("Nest Number") + ylab("Path length (number of nodes)")  +
-  theme(legend.position="none")
+  labs(title = "First Nest Path Length (Individual Experiments)") +
+  theme(legend.position="none",plot.title = element_text(hjust = 0.5))
 ggsave("images/FirstNestVisits-PathLength.png", 
-       dpi=300, width = 5, height = 3, units = "in")
-```
-
-Here we see that again nest 72 has the most direct routes; in fact there are several ants that went directly there -- something that never happened for any other nest.
-
-### Are they more likely to go on wide branches?
-
-We can also inspect whether they prefer wider branches when exploring. At some decisions the ants need to decide between wide and narrow branches, but not many, since U-turns do not count as a wide bias, and ants coming from a narrow branch have equal width in front of them.
-
-```{r}
-turn_choices_by_ant_width <- turn_choices %>% 
-  group_by(Colony,Ant.ID) %>%
-  filter(Num.Inspections==0) %>%
-  filter(Ant.In.Pair=="A") %>%
-  summarize(num_turns=n(), 
-            narrow_turns=sum(Turn.Width=="N",na.rm=T), 
-            wide_turns=sum(Turn.Width=="W",na.rm=T), 
-            total_width_turns=narrow_turns+wide_turns) %>%
-  ungroup()
-
-wide.model <- lm(wide_turns ~ total_width_turns + 0,
-                  data=turn_choices_by_ant_width)
-no.bias.model <- lm(wide_turns ~ offset(0.5*total_width_turns)+0, 
-                    data=turn_choices_by_ant_width)
-summary(wide.model)
-anova(wide.model,no.bias.model)
-```
-
-Comparing the fitted model with a model of known slope (=0.5) shows that outgoing ants have a significant wide bias, staying on the wide branch 63.2% of the time where width could be considered. This plot illustrates this:
-
-```{r}
-max_turns <- max(turn_choices_by_ant_width$total_width_turns)
-ggplot(turn_choices_by_ant_width, aes(x=total_width_turns,y=wide_turns)) + 
-  geom_point(aes(color=Colony)) + 
-  geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
-  geom_abline(slope=0.5,intercept=0,lty=2) + 
-  xlab("Total number of turns") + ylab("Number of wide turns") +
-  xlim(0,max_turns) +
-  theme_minimal(base_size = 25)
-ggsave("images/WidevsTotalTurns.png", 
        dpi=300, width = 8, height = 5, units = "in")
 ```
 
-### Are they more likely to travel toward or away from the trunk?
-Are ants generally more likely to move toward or away from the trunk? How does this tendency change after they have inspected something at a tip?
-
-Analysis including ant choices both before and after inspection, without differentiating between the two.
-```{r}
-turn_choices_by_ant_trunk <- turn_choices %>% 
-  group_by(Colony,Ant.ID) %>%
-  #filter(Num.Inspections==0) %>% Unlike with the past analyses, we don't want 
-  # to filter out the decisions made after inspection.
-  filter(Ant.In.Pair=="A") %>% # Still do filter out the second ant in the pair 
-  #because it might be influenced by the first
-  filter(Direction.From!="main") %>% #also only include turns where ant has choice between toward and away, 
-  # not ones where it's away either way (i.e. turning from main)
-  summarize(num_turns=n(), 
-            turns_to_trunk=sum(Turn.Trunk=="to.trunk",na.rm=T), 
-            turns_away_from_trunk=sum(Turn.Trunk=="away.from.trunk",na.rm=T), 
-            total_turns=turns_to_trunk+turns_away_from_trunk) %>%
-  ungroup()
-
-trunk.model <- lm(turns_to_trunk ~ total_turns + 0,
-                  data=turn_choices_by_ant_trunk)
-no.bias.model <- lm(turns_to_trunk ~ offset(0.5*total_turns)+0, 
-                    data=turn_choices_by_ant_trunk)
-summary(trunk.model)
-anova(trunk.model,no.bias.model)
-```
-Like when analyzing left vs right or wide vs narrow turns the ants made, the no bias model is that the ants have a 50:50 chance of picking either option between "to trunk" or "away from trunk" (if we only consider turns that present a choice between toward and away). It appears that ants turn toward the trunk about 59.897% of the time overall.
-
-How does the likelihood of moving toward the trunk differ before and after an ant has inspected? (e.g. do ants tend to go to the trunk after inspecting at a tip?)
-```{r}
-# group turn_choices by whether Num.Inspections is 0 or not
-# for the two categories, do ANOVA separately.
-turn_choices_trunk_before_inspect <- turn_choices %>% 
-  group_by(Colony,Ant.ID) %>%
-  filter(Num.Inspections==0) %>% # ant has not inspected yet
-  filter(Ant.In.Pair=="A") %>% 
-  filter(Direction.From!="main") %>%
-  summarize(num_turns=n(), 
-            turns_to_trunk=sum(Turn.Trunk=="to.trunk",na.rm=T), 
-            turns_away_from_trunk=sum(Turn.Trunk=="away.from.trunk",na.rm=T), 
-            total_turns=turns_to_trunk+turns_away_from_trunk) %>%
-  ungroup()
-
-trunk.model <- lm(turns_to_trunk ~ total_turns + 0,
-                  data=turn_choices_trunk_before_inspect)
-no.bias.model <- lm(turns_to_trunk ~ offset(0.5*total_turns)+0, 
-                    data=turn_choices_trunk_before_inspect)
-summary(trunk.model)
-anova(trunk.model,no.bias.model)
-```
+The plot suggests that nest B3 has the most direct routes; in fact there are several ants that went directly there -- something that never happened for any other nest. Let's test this using a negative binomial model to represent the number of nodes an ant passed through on the way to its first nest. We'll use 'sum contrasts' for the nest location, which means we'll compare the first path length for each nest to the mean first path length observed across all nests.
 
 ```{r}
-turn_choices_trunk_after_inspect <- turn_choices %>% 
-  group_by(Colony,Ant.ID) %>%
-  filter(Num.Inspections!=0) %>% # ant has already inspected
-  filter(Ant.In.Pair=="A") %>% 
-  filter(Direction.From!="main") %>%
-  summarize(num_turns=n(), 
-            turns_to_trunk=sum(Turn.Trunk=="to.trunk",na.rm=T), 
-            turns_away_from_trunk=sum(Turn.Trunk=="away.from.trunk",na.rm=T), 
-            total_turns=turns_to_trunk+turns_away_from_trunk) %>%
-  ungroup()
+model.pathlength.bynest <- glmmTMB(Num.Nodes.Passed ~ Nest.Location + 
+                          (1|Colony),
+                          contrasts = list(Nest.Location = "contr.sum"),
+                        family="nbinom2", data=first_nest_visits)
 
-trunk.model <- lm(turns_to_trunk ~ total_turns + 0,
-                  data=turn_choices_trunk_after_inspect)
-no.bias.model <- lm(turns_to_trunk ~ offset(0.5*total_turns)+0, 
-                    data=turn_choices_trunk_after_inspect)
-summary(trunk.model)
-anova(trunk.model,no.bias.model)
-```
-Before inspecting, the ants have at 61.162% chance of turning toward the trunk. After inspecting, that chance is 59.320%. I could do a statistical test to determine whether this difference in proportions is significant, but that's not the focus here. I could also distinguish between number of inspections done and do ANOVA based on that, but I'm not sure whether that's useful to know or not.
-
-Visualizing the data on turn choices toward/away from trunk overall (adapting code used to visualize the likelihood of right turns):
-```{r}
-max_turns_trunk <- max(turn_choices_by_ant_trunk$total_turns)
-ggplot(turn_choices_by_ant_trunk, aes(x=total_turns,y=turns_to_trunk)) + 
-  geom_point(aes(color=Colony)) + 
-  geom_smooth(method="lm", formula=y ~ x + 0, color="black") +
-  geom_abline(slope=0.5,intercept=0,lty=2) + 
-  xlab("Total number of turns") + ylab("Number of turns to trunk") +
-  xlim(0,max_turns_trunk) +
-  theme_minimal(base_size = 12)
-ggsave("images/ToTrunkvsTotalTurns.png", 
-       dpi=300, width = 8, height = 5, units = "in")
+sjPlot::tab_model(model.pathlength.bynest)
 ```
 
-
-### Examining sequences of turns
-If an ant turns [left/right/U-turn], what is the likelihood that the next turn will be [left/right/U-turn]?
-e.g. How often is a right turn followed by a left turn? By a right turn? By a U-turn?
-```{r}
-turn_choices_seq <- turn_choices %>%
-  group_by(Colony,Ant.ID) %>%
-  filter(Num.Inspections==0) %>%
-  filter(Ant.In.Pair=="A") %>% 
-  mutate(Next.Turn.Type = lead(Turn.Type)) %>%
-  #mutate(Turn.Seq.Pair = ifelse(is.na(Next.Turn.Type), NA, paste(Turn.Type, Next.Turn.Type))) %>%
-  ungroup()
-
-#split_Turn.Seq.Pair <- strsplit(turn_choices_seq$Turn.Seq.Pair, " ")
-
-# Summary:
-num_of_turn1_then_turn2 <- turn_choices_seq %>%
-  group_by(Turn.Type, Next.Turn.Type) %>%
-  filter(is.na(Turn.Type) == FALSE & is.na(Next.Turn.Type) == FALSE) %>%
-  summarize(n_turn1_then_turn2=n())
-
-num_of_turn1 <- turn_choices_seq %>%
-  group_by(Turn.Type) %>%
-  filter(is.na(Turn.Type) == FALSE & is.na(Next.Turn.Type) == FALSE) %>%
-  summarize(n_turn1=n()) 
-
-turn_choices_seq_summary <- left_join(num_of_turn1_then_turn2, num_of_turn1, by=c("Turn.Type")) %>%
-  group_by(Turn.Type, Next.Turn.Type) %>%
-  summarize(n=n_turn1_then_turn2, prop_turn1_then_turn2 = n_turn1_then_turn2/n_turn1)
-# Proportions are calculated relative to the number of turns that started with the
-# given direction, e.g. for (L, L) you would do 97/(97+74+23)
-
-turn_choices_seq_summary
-
-# Will we want to exclude U-turns from analysis?
-```
-When an ant turns one direction, the next turn is more likely to be in that same direction than in the opposite direction (i.e. 50% chance to follow a L turn with L, 38% chance to follow L turn with R; 60% to follow R turn with R, 25% to follow R turn with L). After a U-turn, an ant is slightly more likely to turn right than left, and will very rarely follow a U-turn with a U-turn.
-
-Visualization:
-```{r}
-ggplot(turn_choices_seq_summary, aes(x=Turn.Type, y=prop_turn1_then_turn2)) + 
-  geom_col(aes(fill = Next.Turn.Type)) +
-  xlab("First turn type") +
-  ylab("Proportion of next turn type")
-
-ggsave("images/SequentialTurnTypeDecisions.png", 
-       dpi=300, width = 8, height = 5, units = "in")
-```
-
-
-Seeing the data above, I realized that U-turns make up a substantial proportion of ant turns. If an ant is more likely to make a U-turn after a certain type of turn, that could introduce additional bias into the data. I'd like to determine the strength of the bias and also look at the data with U-turns excluded.
-
-If an ant turns [toward/away from] the trunk, what is the likelihood of a [R/L/U] turn?
-```{r}
-#still using turn_choices_seq because the data we need for this question is all in turn_choices_seq
-
-# Summary:
-num_of_turn1_then_turn2 <- turn_choices_seq %>%
-  group_by(Turn.Trunk, Next.Turn.Type) %>%
-  filter(is.na(Turn.Trunk) == FALSE & is.na(Next.Turn.Type) == FALSE) %>%
-  summarize(n_turn1_then_turn2=n())
-
-num_of_turn1 <- turn_choices_seq %>%
-  group_by(Turn.Trunk) %>%
-  filter(is.na(Turn.Trunk) == FALSE & is.na(Next.Turn.Type) == FALSE) %>%
-  summarize(n_turn1=n()) 
-
-turn_choices_trunk_then_type_summary <- left_join(num_of_turn1_then_turn2, num_of_turn1, by=c("Turn.Trunk")) %>%
-  group_by(Turn.Trunk, Next.Turn.Type) %>%
-  summarize(n=n_turn1_then_turn2, prop_turn1_then_turn2 = n_turn1_then_turn2/n_turn1)
-
-turn_choices_trunk_then_type_summary
-```
-Regarding the main point of doing this analysis: ants have roughly the same likelihood of making a U-turn next regardless of whether their previous turn was away from or toward the trunk. Therefore, U-turns don't contribute to creating the bias for moving toward the trunk (e.g. it is not the case that ants moving away from the trunk are that much more likely to U-turn and therefore move toward the trunk). Curiously, the chance of moving right is much higher than the chance of moving left, which may or may not actually be consistent with the right turn bias observed earlier (as that previous analysis was done excluding U-turns).
-
-Visualization:
-```{r}
-ggplot(turn_choices_trunk_then_type_summary, aes(x=Turn.Trunk, y=prop_turn1_then_turn2)) + 
-  geom_col(aes(fill = Next.Turn.Type)) +
-  xlab("First turn type") +
-  ylab("Proportion of next turn type")
-  
-ggsave("images/SequentialTurnTypeDecisionsTrunkToType.png", 
-       dpi=300, width = 8, height = 5, units = "in")
-```
-
-Why, then, do ants tend to end up at nest 72 rather than at nest 82? It is shown above that the first turn the ants take has a slightly greater chance to be to the left rather than to the right. Nest 72 is to the left while nest 82 is to the right. However, the difference in preference for starting left/right is not great enough on its own to explain the great preference for 72 over 82. We also know that once an ant starts down a path, the likelihood of U-turning (which changes the path the ant takes) is equally likely regardless of whether the ant is moving toward or away from the trunk.
-
-I also want to look at how likely it is for an ant to turn from a wide branch to a narrow branch (or vice versa, or staying on a branch of the same width) when turning toward the trunk or away from the trunk. This tells us whether an ant's preference to go further out onto limbs differs based on whether it's moving toward or away from the trunk. That is something that could affect which nests the ant ends up at.
-```{r}
-# Will need to make a new dataframe rather than reusing turn_choices_seq 
-# because I need to mutate in a new variable for the next value of Turn.Width
-
-turn_choices_seq_width <- turn_choices %>%
-  group_by(Colony,Ant.ID) %>%
-  filter(Num.Inspections==0) %>%
-  filter(Ant.In.Pair=="A") %>% 
-  mutate(Next.Turn.Width = lead(Turn.Width)) %>%
-  ungroup()
-
-# Summary:
-num_of_turn1_then_turn2 <- turn_choices_seq_width %>%
-  group_by(Turn.Trunk, Next.Turn.Width) %>%
-  filter(is.na(Turn.Trunk) == FALSE & is.na(Next.Turn.Width) == FALSE) %>%
-  summarize(n_turn1_then_turn2=n())
-
-num_of_turn1 <- turn_choices_seq_width %>%
-  group_by(Turn.Trunk) %>%
-  filter(is.na(Turn.Trunk) == FALSE & is.na(Next.Turn.Width) == FALSE) %>%
-  summarize(n_turn1=n()) 
-
-turn_choices_seq_width_summary <- left_join(num_of_turn1_then_turn2, num_of_turn1, by=c("Turn.Trunk")) %>%
-  group_by(Turn.Trunk, Next.Turn.Width) %>%
-  summarize(n=n_turn1_then_turn2, prop_turn1_then_turn2 = n_turn1_then_turn2/n_turn1)
-
-turn_choices_seq_width_summary
-
-```
-It seems that when ants are moving away from the trunk, there is an even greater preference for turning onto wider branches than when ants are moving toward the trunk. In most cases, as ants move to nests they must make the choice to turn onto narrower branches. Because ants moving away from the trunk prefer to turn onto wider branches, this could contribute to decreased nest visits for nests to the right of the entry point (in the visual where the trunk is to the left). It could also deter ants from visiting nests that require three separate instances of choosing the narrower branch (moving from widths of 0.60 to 0.45 to 0.34 to 0.25, e.g. nests 1112 and 2212 if I'm not mistaken). However, nest 82 can be reached without turning onto narrower branches, and yet it is visited very little.  
-Now that I think about it, though, this analysis is flawed. When moving toward the trunk, there are more routes that involve moving from narrow to wide branches, e.g moving from a tip to a wider branch and then to the main (thickest) branch. On the other hand, moving away from the trunk involves moving from wider to narrower branches. I will exclude this analysis from my presentation.
+This shows that the overall path length is 22.52 nodes; the first nest location (A2) has significantly longer paths (39% more nodes), the second nest location (B3) has significantly shorter paths (30% fewer nodes), and the third nest location (D2) has significantly longer paths (95% more nodes). These three are likely the only ones that are significant because the other nests received fewer visits (5 or less).
 
 ### Do ants have a turning angle bias?
 
@@ -548,7 +238,7 @@ To determine this, we will ask whether ants tend to take the sharper (more devia
 
 1. The direction the ant approaches the junction from: the main branch (main), the thinner more angled offshoot (sharp), or the thicker less angled offshoot (shallow)
 
-To do this, we'll need to introduce some new variables to describe the junctions and the turns at each junction. First of all, we classify each junction as a left-handed one (with the sharp offshoot to the left) or a right-handed one (with the sharp offshoot to the right).
+To do this, we'll need to introduce some new variables to describe the junctions and the turns at each junction. First of all, we classify each junction as a left-handed one (with the narrower, sharper-angled offshoot to the left) or a right-handed one (with the narrower, sharper-angled offshoot to the right). There are two special cases where the width is the same for all three branches at the junction, but the difference in angle nonetheless gives them a handedness.
 
 ```{r}
 junction_type <- branches %>%
@@ -565,13 +255,11 @@ junction_type <- branches %>%
   mutate(Junction.Handedness=factor(Junction.Handedness))
 ```
 
-This produces a table of junction ID number and handedness. The two special cases where both offshoots are narrow could be excluded from our model but they do have a handedness, which cannot be extracted by analyzing narrow/wideness.
-
 Now we can create a new way to classify each turn (`Turn.Angle`), as "sharp" or "shallow", according to how the ant entered the junction (`Direction.From`: "main", "left", "right") and the handedness of that junction (`Junction.Handedness`: "LH", "RH"). For example, if the ant enters from "main", and turns left on a left-handed junction, that means it has taken the sharper turn.
 
 We also classify the direction it has come from (`Angle.From`) according to the angle, so for example an ant coming from the left branch on a left-handed junction is coming from the "sharp" direction (the more-angled offshoot), while an ant coming from the left branch on a right-handed junction is coming from the "shallow" direction (the less-angled offshoot).
 
-Finally, we determine whether the sharper turn is on the left side or the right side (`sharpIsLeft`), which depends on whether it is a left or right-handed junctions, and which branch the ant is coming from.
+Finally, we determine whether the sharper turn is on the left side or the right side (`sharpIsLeft`), which depends on whether it is a left or right-handed junction, and which branch the ant is coming from.
 
 ```{r}
 turns <- turns %>%
@@ -618,7 +306,7 @@ Finally we join the actual turn choices individual ants made (`turn_choices`) wi
 
 ```{r}
 turn_choices_angle <- turn_choices %>%
-  left_join(select(
+  left_join(dplyr::select(
     turns, Node.From, Node.To, Turn.Angle, Angle.From,
     isSharpTurn, sharpIsLeft, Junction.Handedness), 
     by=c("Node.From", "Node.To")) %>%
@@ -660,9 +348,8 @@ angle_model_star <- glmer(
   family = binomial, turn_choices_angle)
 
 # Which model is best?
-anova(null_model,angle_model,test="Chisq")
-anova(angle_model,angle_model_plus,test="Chisq")
-anova(angle_model_plus,angle_model_star,test="Chisq")
+AICtab(null_model, leftright_model,
+       angle_model,angle_model_plus,angle_model_star)
 ```
 
 
@@ -682,7 +369,7 @@ To interpret the model, let's look at the estimates and 95% CI for the coefficie
 # create a small table containing all six types of approaches
 approach.types <- turn_choices_angle %>% 
   ungroup() %>% 
-  select(Angle.From, Junction.Handedness, Direction.From, sharpIsLeft) %>% 
+  dplyr::select(Angle.From, Junction.Handedness, Direction.From, sharpIsLeft) %>% 
   distinct() %>%
   arrange(Angle.From, sharpIsLeft)
 # use the table to make predictions from the model
@@ -713,7 +400,7 @@ Here we'll create the first plot.
 angle_graph_data <- turn_choices_angle %>%
   ungroup() %>%
   group_by(Angle.From, Junction.Handedness, Junction) %>%
-  select(isSharpTurn) %>%
+  dplyr::select(isSharpTurn) %>%
   filter(Junction != 0) %>%
   summarize(Total = n(), Sharp = sum(isSharpTurn)) %>%
   mutate(Junction = as.numeric(Junction),
@@ -749,11 +436,16 @@ Join the fixed_effects data frame with approach.types to get them to match for m
 
 ```{r}
 approach.types <- approach.types
-fixed_effects <- as_tibble(fixed_effects) %>% mutate(sharpIsLeft = as.logical(sharpIsLeft))
+fixed_effects <- as_tibble(fixed_effects) %>% 
+  mutate(sharpIsLeft = as.logical(sharpIsLeft))
 approach.types
 fixed_effects
 
-angle_fit_data <- left_join(approach.types, fixed_effects, by = c("Angle.From","sharpIsLeft"))
+angle_fit_data <- left_join(approach.types, fixed_effects, by = c("Angle.From","sharpIsLeft")) #%>%
+   # mutate(Angle.From = case_when(
+   #          Angle.From == "main" ~ "Main",
+   #          Angle.From == "sharp" ~ "Secondary",
+   #          Angle.From == "shallow" ~ "Primary"))
 angle_fit_data
 ```
 
@@ -776,18 +468,6 @@ Non-transformed data visualization:
 ```{r}
 maxtotal <- max(angle_graph_data$Total)
 maxsharp <- max(angle_graph_data$Sharp)
-
-testribbon <- tibble(Junction.Handedness = c(rep(c(rep("LH",6),rep("RH",6)),1)),
-                     Angle.From= c(rep(c(rep("Main",2), rep("Primary",2), rep("Secondary",2)),2)),
-                     x = c(rep(c(0,maxtotal),6)),
-                     ymax = c(0,5,0,10,0,15,0,20,0,15,0,10),
-                     ymin = c(rep(c(0, 1),6))
-                     )
-testpolygon <- tibble(xu = c(0,0,maxtotal, maxtotal),
-                      yu = c(0,maxsharp,maxsharp,maxtotal/2),
-                      xl = c(0,0,maxtotal,maxtotal),
-                      yl = c(0,0,0,maxtotal/2))
-
 maxtrue <- max(maxtotal,maxsharp*2)
 
 testpolygon2 <- tibble(xu = c(0,0,maxtrue),
@@ -800,15 +480,15 @@ angle_ribbon_data_pre <- angle_fit_data %>%
 
 angle_ribbon_data_x <- angle_ribbon_data_pre %>%
   pivot_longer(cols = c(x0,xf), values_to = "x") %>%
-  select(Junction.Handedness, Angle.From, x)
+  dplyr::select(Junction.Handedness, Angle.From, x)
 
 angle_ribbon_data_ymax <- angle_ribbon_data_pre %>%
   pivot_longer(cols = c(ymax0,ymaxf), values_to = "ymax") %>%
-  select(ymax)
+  dplyr::select(ymax)
 
 angle_ribbon_data_ymin <- angle_ribbon_data_pre %>%
   pivot_longer(cols = c(ymin0,yminf), values_to = "ymin") %>%
-  select(ymin)
+  dplyr::select(ymin)
 
 angle_ribbon_data <- bind_cols(angle_ribbon_data_x,angle_ribbon_data_ymax) %>%
   bind_cols(angle_ribbon_data_ymin)
@@ -818,15 +498,15 @@ angle_ribbon_data_pre2 <- angle_fit_data %>%
 
 angle_ribbon_data_x2 <- angle_ribbon_data_pre2 %>%
   pivot_longer(cols = c(x0,xf), values_to = "x") %>%
-  select(Junction.Handedness, Angle.From, x)
+  dplyr::select(Junction.Handedness, Angle.From, x)
 
 angle_ribbon_data_ymax2 <- angle_ribbon_data_pre2 %>%
   pivot_longer(cols = c(ymax0,ymaxf), values_to = "ymax") %>%
-  select(ymax)
+  dplyr::select(ymax)
 
 angle_ribbon_data_ymin2 <- angle_ribbon_data_pre2 %>%
   pivot_longer(cols = c(ymin0,yminf), values_to = "ymin") %>%
-  select(ymin)
+  dplyr::select(ymin)
 
 angle_ribbon_data2 <- bind_cols(angle_ribbon_data_x2,angle_ribbon_data_ymax2) %>%
   bind_cols(angle_ribbon_data_ymin2)
@@ -834,16 +514,20 @@ angle_ribbon_data2 <- bind_cols(angle_ribbon_data_x2,angle_ribbon_data_ymax2) %>
 
 
 ```{r}
+junction.labels <- c(LH="Left-handed", RH="Right-handed")
+angle.labels <- c(main="From main",shallow="From primary",sharp="From secondary")
 angle_graph_data %>%
   ggplot() +
-  facet_grid(cols = vars(Junction.Handedness), rows = vars(Angle.From)) +
+  facet_grid(cols = vars(Junction.Handedness), rows = vars(Angle.From),
+             labeller=labeller(Junction.Handedness=junction.labels,
+                               Angle.From=angle.labels)) +
   geom_point(mapping = aes(x = Total, y = Sharp)) +
   geom_abline(data=angle_fit_data, aes(slope = fit, intercept = 0),size = 1) +
   geom_ribbon(data=angle_ribbon_data2, aes(x = x, ymin = ymin, ymax = ymax), alpha = .3) +
   geom_polygon(data = testpolygon2, aes(x = xu, y = yu), alpha = .25, fill = "red") +
   geom_polygon(data = testpolygon2, aes(x = xl, y = yl), alpha = .25, fill = "blue") +
-  theme_classic(base_size = 15) +
-  coord_cartesian(xlim = c(0,maxtrue), ylim = c(0, maxtrue/2)) +
+  coord_cartesian(xlim = c(0,maxtrue), ylim = c(0, maxtrue/2), 
+                  expand = FALSE, clip="on") +
   labs(y = "Number of Sharp Turns", x = "Number of Total Turns")
 ggsave("images/Angle_Data_Visualization.png",dpi=300, width = 5, height = 7, units = "in")
 ```
@@ -854,7 +538,7 @@ Here is a table of the total turns in each category to be used in creating the s
 turn_choices_angle %>%
   ungroup() %>%
   group_by(Direction.From, Junction.Handedness) %>%
-  select(isSharpTurn) %>%
+  dplyr::select(isSharpTurn) %>%
   summarize(Total = n(), Sharp = sum(isSharpTurn))
 ```
 
@@ -872,7 +556,7 @@ That is, we will use exactly the same explanatory variables as in the turning an
 
 ```{r}
 turn_choices_u <- turn_choices %>%
-  left_join(select(
+  left_join(dplyr::select(
     turns, Node.From, Node.To, Turn.Angle, Angle.From, isUTurn, sharpIsLeft, Junction.Handedness), 
     by=c("Node.From", "Node.To")) %>%
   filter(Num.Inspections==0,Ant.In.Pair=="A")
@@ -930,7 +614,7 @@ approach.types$U.Turn.Prob <- predict(
 #            Angle.From == "main" ~ "Main",
 #            Angle.From == "sharp" ~ "Secondary",
 #            Angle.From == "shallow" ~ "Primary"))
-approach.types %>% select(Angle.From, Junction.Handedness, sharpIsLeft,
+approach.types %>% dplyr::select(Angle.From, Junction.Handedness, sharpIsLeft,
                           Sharp.Turn.Prob, U.Turn.Prob)
 ```
 
