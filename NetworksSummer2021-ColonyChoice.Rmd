@@ -1,8 +1,11 @@
 ---
-title: "Networks Summer 2021 - Colony Choice"
+title: "Ant Networks Summer 2022: Colony Choice"
 author: "Matina Donaldson-Matasci"
 date: "6/15/2022"
-output: html_document
+output:
+  pdf_document:       
+    latex_engine: xelatex
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}

@@ -3,9 +3,10 @@ title: "Individual Movement Analysis"
 author: "Matina Donaldson-Matasci"
 date: "10/11/2021"
 output:
-  html_document: default
+  pdf_document: 
+      latex_engine: xelatex
   word_document: default
-  pdf_document: default
+  html_document: default
 ---
 
 ```{r setup, include=FALSE}
