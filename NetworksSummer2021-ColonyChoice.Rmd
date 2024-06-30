@@ -1,5 +1,5 @@
 ---
-title: "Ant Networks Summer 2022: Colony Choice"
+title: "Ant Networks Summer 2021: Colony Choice"
 author: "Matina Donaldson-Matasci"
 date: "6/15/2022"
 output:
@@ -13,7 +13,7 @@ require(tidyverse)
 require(lubridate)
 require(glmmTMB)
 require(sjPlot)
-theme_set(theme_test(base_size=18))
+theme_set(theme_test(base_size=10))
 
 nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
 names(nest.palette) = c("A2","B3","C1","D2","E1","F1","G1","H1")
@@ -59,7 +59,17 @@ census <- census %>%
   rename(Census.Location=Nest) %>%
   filter(When=="post")
 ```
+To make the graphs a little easier to look at, we'll rename the colonies in order of size from smallest to largest. First, let's count the total number of ants in each colony. Then, we'll create a colony ID in order from smallest to largest.
 
+```{r}
+census %>% group_by(Colony.Name) %>% 
+  summarize(totalAnts=sum(Workers,Soldiers, Queen, Winged.Queens, Males))
+
+census <- census %>%
+  mutate(Colony.ID = factor(Colony.Name, 
+                            levels= c("21-MW3","21-BA2","21-SP3","21-SP2"),
+                            labels = c("Col1","Col2","Col3","Col4")))
+```
 We want to join this with information about each nest.
 
 ```{r}
@@ -82,13 +92,16 @@ census %>%
   geom_col() +
   scale_fill_manual(values=nest.palette,drop=F) +
 #  scale_y_log10() +
-  facet_grid(Colony.Name~.) + 
+  facet_grid(Colony.ID~.) + 
   xlab("Nest Location") + ylab("Number of workers") +
   labs(fill="Nest Location")  +
-  labs(title = "Nest Choice (Colony Experiment)") +
+#  labs(title = "Nest Choice (Colony Experiment)") +
   theme(legend.position="none",plot.title = element_text(hjust = 0.5))
-ggsave("images/ColonyChoice-NumWorkers-POSTER.png", 
-       dpi=300, width = 8, height = 5, units = "in")
+#ggsave("images/ColonyChoice-NumWorkers-POSTER.png", 
+#       dpi=300, width = 8, height = 5, units = "in")
+ggsave("images/ColonyChoice-NumWorkers-PAPER.eps", 
+       width = 3, height = 2.5, units = "in")
+
 ```
 Next, let's load in the daily checks of each nest during the experiment. This contains a qualitative assessment of the number of ants in each nest periodically during each colony choice experiment.
 
@@ -104,6 +117,9 @@ daily <- daily %>%
   mutate(Experiment.Time=days(Experiment.Day)+hm(Time)) %>%
   dplyr::select(-Time) %>%
   rename_with(~gsub('\\.\\..*','',.x)) %>%
+  mutate(Colony.ID = factor(Colony, 
+                            levels= c("21-MW3","21-BA2","21-SP3","21-SP2"),
+                            labels = c("Col1","Col2","Col3","Col4"))) %>%
   rename(Nest.Label=Nest) %>%
   mutate(Nest.Label=if_else(Nest.Label=="2111","2112",Nest.Label)) %>% # mislabeling of nest
   mutate(Number.of.ants=factor(tolower(Number.of.ants), 
@@ -125,20 +141,24 @@ daily <- daily %>% left_join(tips,by=c("Nest.Label"="Tip")) %>%
 
 ```{r}
 daily %>% 
+  filter(Number.of.ants != "none") %>%
   ggplot(aes(x=as.numeric(Experiment.Time,"days"),
              y=Nest.Location, color=Nest.Location,
-             size=Number.of.ants)) + 
+             linewidth=Number.of.ants)) + 
   geom_line() +
   scale_color_manual(values=nest.palette,drop=F) +
-  scale_size_manual(values=c(0,0.25,1.5)) +
-  facet_grid(Colony~.) +
+  scale_linewidth_manual(name="Nest occupation", 
+                         values=c(0.3,1.5), labels=c("few ants", "many ants")) +
+  facet_grid(Colony.ID~.) +
   theme(axis.text.y = element_blank(), axis.ticks= element_blank()) +
   xlab("Day of Experiment") +
   ylab("Nest Location") +
-  labs(title = "Nest Occupation (Colony Experiment)") +
-  labs(color="Nest Location", size="Number of ants")
-ggsave("images/ColonyChoice-DailyCheck-POSTER.png", 
-       dpi=300, width = 8, height = 5, units = "in")
+  # labs(title = "Nest Occupation (Colony Experiment)") +
+  guides(color="none")
+#ggsave("images/ColonyChoice-DailyCheck-POSTER.png", 
+#       dpi=300, width = 8, height = 5, units = "in")
+ggsave("images/ColonyChoice-DailyCheck-PAPER.eps", 
+       width = 6.5, height = 2, units = "in")
 ```
 
 ## Do colonies show a preference for specific nests?
@@ -155,6 +175,8 @@ sjPlot::tab_model(model.workers.bynest)
 ```
 
 Let's also check for a preference in how often those nests were heavily occupied during the daily checks. This shows that again, nest B3 was most likely to be occupied by many ants (odds ratio 13.0, 95% CI 2.6-63.1), with nest F1 being the second most likely (odds ratio 1.1, 95% CI 0.3--4.4).
+
+**This is not an appropriate analysis because it treats multiple timepoints within the same colony as independent measures.**
 
 ```{r}
 model.daily.bynest <- glmmTMB(Number.of.ants=="many" ~ Nest.Location + 

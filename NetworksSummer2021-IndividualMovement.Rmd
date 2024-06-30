@@ -20,7 +20,8 @@ require(lme4)
 require(glmmTMB)
 require(bbmle) #for AICtab
 
-theme_set(theme_test(base_size=18))
+# theme_set(theme_test(base_size=18)) # For poster
+theme_set(theme_test(base_size=10)) # For paper
 
 nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
 nest.names <- c("A2","B3","C1","D2","E1","F1","G1","H1")
@@ -73,8 +74,11 @@ branches <- branches %>%
   mutate(Rel.Width = if_else(Width > min(Width),"wide","narrow")) %>%
   ungroup()
 
-turns <- full_join(branches,branches,by=c("Junction"),suffix=c(".From",".To")) %>%
+turns <- full_join(branches, branches,
+                   by=c("Junction"), suffix=c(".From",".To"),
+                   relationship = "many-to-many") %>%
   rename(Node.From=Leads.to.Node.From, Node.To=Leads.to.Node.To)
+ 
 turns <- turns %>%
   mutate(Turn.Type = factor(case_when(
     Direction.From=="main" & Direction.To=="left" ~ "L",
@@ -184,11 +188,13 @@ ggplot(first_nest_visits, aes(x=Nest.Location,fill=Nest.Location)) +
   scale_fill_manual(values=nest.palette,drop=F) +
   scale_x_discrete(drop=F) +
   xlab("Nest Location") + 
-  ylab("Number of ants reaching this nest first") +
-  labs(title = "Nest Discovery (Individual Experiments)") +
+  ylab("Ants reaching this nest first") +
+#  labs(title = "Nest Discovery (Individual Experiments)") +
   theme(legend.position="none",plot.title = element_text(hjust = 0.5))
-ggsave("images/FirstNestVisits-NumAnts-POSTER.png", 
-       dpi=300, width = 8, height = 5, units = "in")
+#ggsave("images/FirstNestVisits-NumAnts-POSTER.png", 
+#       dpi=300, width = 8, height = 5, units = "in")
+ggsave("images/FirstNestVisits-NumAnts-PAPER.png", 
+       dpi=600, width = 3, height = 2.5, units = "in")
 ```
 
 Is there a significant preference for particular nests over others? We can do a chi-squared goodness of fit test to test the null hypothesis that ants are equally likely to reach all 8 nests first. Assumptions are: (1) independence of observations, and (2) no more than 20% of the expected values in each cell are less than 5. Here we have a total of 46 observations in 8 categories, so the expected value for each cell is 5.75.
@@ -204,19 +210,34 @@ We also would like to know how direct their route to get there was. If they take
 ```{r}
 ggplot(first_nest_visits, aes(x=Nest.Location,
                               y=Num.Nodes.Passed)) + 
-  geom_boxplot(aes(fill=Nest.Location)) + 
-  geom_jitter(height=0,width=0.15) +
+  geom_boxplot(aes(fill=Nest.Location), outlier.shape=NA) + 
+  geom_jitter(height=0,width=0.2, shape=21) +
   scale_fill_manual(values=nest.palette,drop=F) +
   scale_x_discrete(drop=F) +
   geom_abline(slope=0,intercept=6,lty=2) +
   xlab("Nest Number") + ylab("Path length (number of nodes)")  +
-  labs(title = "First Nest Path Length (Individual Experiments)") +
-  theme(legend.position="none",plot.title = element_text(hjust = 0.5))
-ggsave("images/FirstNestVisits-PathLength.png", 
-       dpi=300, width = 8, height = 5, units = "in")
+#  labs(title = "First Nest Path Length (Individual Experiments)") +
+  theme(legend.position="none", plot.title = element_text(hjust = 0.5))
+# ggsave("images/FirstNestVisits-PathLength.png", 
+#        dpi=300, width = 8, height = 5, units = "in")
+ggsave("images/FirstNestVisits-PathLength-PAPER.png", 
+       dpi=600, width = 3, height = 2.5, units = "in")
 ```
 
-The plot suggests that nest B3 has the most direct routes; in fact there are several ants that went directly there -- something that never happened for any other nest. Let's test this using a negative binomial model to represent the number of nodes an ant passed through on the way to its first nest. We'll use 'sum contrasts' for the nest location, which means we'll compare the first path length for each nest to the mean first path length observed across all nests.
+The plot suggests that nest B3 has the most direct routes; in fact there are several ants that went directly there -- something that never happened for any other nest. 
+
+```{r}
+minNodes <- first_nest_visits %>%
+  ungroup() %>%
+  summarize(minNodes=min(Num.Nodes.Passed)) %>%
+  pull(minNodes)
+
+first_nest_visits %>% 
+  group_by(Nest.Location) %>%
+  filter(Num.Nodes.Passed == minNodes)
+```
+
+Let's test this using a negative binomial model to represent the number of nodes an ant passed through on the way to its first nest. We'll use 'sum contrasts' for the nest location, which means we'll compare the first path length for each nest to the mean first path length observed across all nests.
 
 ```{r}
 model.pathlength.bynest <- glmmTMB(Num.Nodes.Passed ~ Nest.Location + 
@@ -228,6 +249,21 @@ sjPlot::tab_model(model.pathlength.bynest)
 ```
 
 This shows that the overall path length is 22.52 nodes; the first nest location (A2) has significantly longer paths (39% more nodes), the second nest location (B3) has significantly shorter paths (30% fewer nodes), and the third nest location (D2) has significantly longer paths (95% more nodes). These three are likely the only ones that are significant because the other nests received fewer visits (5 or less).
+
+### Are individual ants' nest choices influenced by the previous ant in the pair?
+
+The previous analysis assumes that all ants' choices are independent, but the two ants in a pair may not be. Here we determine whether the second ant in a pair is more likely to choose the same nest as the first ant in a pair than one would expect by chance.
+
+```{r}
+paired_first_nest_visits <- first_nest_visits %>% 
+  separate_wider_position(Ant.ID,
+                    widths=c(Pair.ID=1,
+                             Pair.Order=1)) %>%
+  pivot_wider(id_cols=c(Colony,Pair.ID), 
+              names_from = Pair.Order, 
+              values_from= 
+                c(Nest.Location,Num.Nodes.Passed))
+```
 
 ### Do ants have a turning angle bias?
 
@@ -530,7 +566,7 @@ angle_graph_data %>%
   coord_cartesian(xlim = c(0,maxtrue), ylim = c(0, maxtrue/2), 
                   expand = FALSE, clip="on") +
   labs(y = "Number of Sharp Turns", x = "Number of Total Turns")
-ggsave("images/Angle_Data_Visualization.png",dpi=300, width = 5, height = 7, units = "in")
+ggsave("images/Angle_Data_Visualization-PAPER.png",dpi=600, width = 3.25, height = 4.5, units = "in")
 ```
 
 Here is a table of the total turns in each category to be used in creating the second figure.
