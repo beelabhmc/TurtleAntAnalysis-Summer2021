@@ -1,0 +1,186 @@
+---
+title: "Colony Movement Analysis"
+author: "Matina Donaldson-Matasci"
+date: "2024-05-07"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+require(tidyverse)
+require(broom)
+require(ggthemes)
+require(grDevices)
+require(lme4)
+require(glmmTMB)
+require(bbmle) #for AICtab
+
+# theme_set(theme_test(base_size=18)) # For poster
+theme_set(theme_test(base_size=10)) # For paper
+
+nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
+nest.names <- c("A2","B3","C1","D2","E1","F1","G1","H1")
+names(nest.palette) = nest.names
+```
+
+## Hypotheses / Questions
+
+We would like to explore the movement and turning choices of individual ants moving through a branch maze when they are in a colony context. Some questions:
+
+1. Do the turning choices (left, right, u-turn) at individual junctions match those that were observed in the individual movement trials? If not, are they more extreme? This could indicate positive feedback.
+2. How do the turning choices at individual junctions change over time? Do they become more extreme? This is another, stronger indicator of positive feedback.
+3. What is the proportion of arrivals at each nest? Do the overall numbers match what's expected from the individual movement trials? If not, are they more concentrated at specific nests?
+4. What is the temporal pattern of arrivals at each nest? Are arrivals temporally autocorrelated?
+
+## Nest arrivals
+
+First, let's load in the colony-level tracking data. This gives information on all the turns taken within the first 30 minutes of the colony experiment.
+
+```{r}
+BA2 <- read.csv("data/BA2-Colony-90min-edges.csv") 
+SP2 <- read.csv("data/SP2-Colony-90min-edges.csv")
+MW3 <- read.csv("data/MW3-Colony-90min-edges.csv") 
+SP3 <- read.csv("data/SP3-Colony-90min-edges.csv")
+
+colony_turns <- bind_rows(BA2 = BA2, SP2 = SP2, 
+                          MW3 = MW3, SP3 = SP3, .id="Colony") %>%
+  mutate(Colony.ID = factor(Colony, 
+                            levels= c("MW3","BA2","SP3","SP2"),
+                            labels = c("Col1","Col2","Col3","Col4")))
+
+colony_turns <- colony_turns %>%
+  mutate(Junction = as.numeric(str_sub(roi, 5, -1))) %>%
+  mutate(Direction.From = case_when(
+    edge0 == "Left" ~ "left",
+    edge0 == "Right" ~ "right",
+    edge0 == "Base" ~ "main"
+  )) %>%
+  mutate(Direction.To = case_when(
+    edge1 == "Left" ~ "left",
+    edge1 == "Right" ~ "right",
+    edge1 == "Base" ~ "main"    
+  ))
+
+turns <- read.csv("data/NetworksSummer2021-Turns.csv")
+colony_turn_choices <- colony_turns %>%
+  left_join(turns, 
+    by=c("Junction", "Direction.From", "Direction.To"))
+```
+
+Now let's just filter out turns where ants are headed toward a nest. We can use this to plot a running tally of arrivals at each nest over time.
+
+```{r}
+tip_ref <- read.csv("data/NetworksSummer2021-TipReference.csv")
+
+colony_nest_arrivals <- colony_turn_choices %>%
+  left_join(tip_ref,
+            by=c("Node.To" = "Tip")) %>%
+  filter(Type=="nest") %>%
+  group_by(Colony.ID,Location) %>%
+  mutate(Tally=1) %>%
+  mutate(Cumulative.Arrivals = cumsum(Type=="nest"))
+
+colony_nest_arrivals %>% 
+  ggplot(aes(x=t1,y=Cumulative.Arrivals,color=Location)) +
+  geom_line() +
+  scale_color_manual(values=nest.palette,drop=F) +
+  xlab("Time after experiment start (min)") +
+  ylab("Cumulative arrivals at nest") +
+  facet_wrap(. ~ Colony, scales="free_y")
+```
+
+We could also try to include the nest departures to get a kind of running tally.
+
+```{r}
+colony_nest_departures <- colony_turn_choices %>%
+  left_join(tip_ref,
+            by=c("Node.From" = "Tip")) %>%
+  filter(Type=="nest") %>%
+  group_by(Colony.ID,Location) %>%
+  mutate(Tally=-1) %>%
+  mutate(Cumulative.Departures = -cumsum(Type=="nest"))
+
+colony_nest_tally <- bind_rows(colony_nest_arrivals, 
+                               colony_nest_departures) %>%
+  group_by(Colony.ID) %>%
+  arrange(t0, .by_group=TRUE) %>%
+  group_by(Colony.ID,Location) %>%
+  mutate(Cumulative.Tally = cumsum(Tally))
+
+colony_nest_tally %>% 
+  ggplot(aes(x=t1,y=Cumulative.Tally,color=Location)) +
+  geom_line() +
+  scale_color_manual(values=nest.palette,drop=F) +
+  xlab("Time after experiment start (min)") +
+  ylab("Cumulative tally at nest") +
+  facet_wrap(. ~ Colony.ID, scales="free_y")
+
+```
+
+This doesn't look great. Hmmm.
+
+```{r}
+colony_nest_arrivals <- colony_turn_choices %>%
+  left_join(tip_ref,
+            by=c("Node.To" = "Tip")) %>%
+  filter(Type=="nest") %>%
+  group_by(Colony.ID,Location) %>%
+  mutate(Tally=1) %>%
+  mutate(Cumulative.Arrivals = cumsum(Type=="nest"))
+
+colony_nest_arrivals %>% 
+  ggplot(aes(x=t1,y=Cumulative.Arrivals,color=Location)) +
+  geom_line() +
+  scale_color_manual(values=nest.palette,drop=F) +
+  xlab("Time after experiment start (min)") +
+  ylab("Cumulative arrivals at nest") +
+  facet_wrap(. ~ Colony, scales="free_y")
+```
+
+Let's try to plot what's happening at the different junctions.
+
+```{r}
+colony_turn_choices <- colony_turn_choices %>% 
+  mutate(
+    Branch.From = case_when(
+      Direction.From == "main" ~ "main",
+      Direction.From == "left" & Junction.Handedness == "LH" ~ "secondary",
+      Direction.From == "left" & Junction.Handedness == "RH" ~ "primary",
+      Direction.From == "right" & Junction.Handedness == "LH" ~ "primary",
+      Direction.From == "right" & Junction.Handedness == "RH" ~ "secondary"
+    )
+  ) %>%
+  group_by(Colony, roi, Branch.From) %>%
+  mutate(
+    Angle.Numeric = case_when(
+      Turn.Angle == "shallow" ~ 1, 
+      Turn.Angle == "sharp" ~ -1, 
+      .default = 0), 
+    Angle.Tally = cumsum(Angle.Numeric)
+    ) %>%
+  separate_wider_delim(roi, "_", names=c(NA,"roi.Number"),
+                       cols_remove=FALSE) %>%
+  mutate(roi.Section = case_when(
+    str_starts(roi.Number, "3") ~ "A",
+    str_starts(roi.Number, "5") ~ "B",
+    str_starts(roi.Number, "7") ~ "B",
+    str_starts(roi.Number, "11") ~ "C",
+    str_starts(roi.Number, "12") ~ "D",
+    str_starts(roi.Number, "4") ~ "E",
+    str_starts(roi.Number, "8") ~ "F",
+    str_starts(roi.Number, "6") ~ "F",
+    str_starts(roi.Number, "21") ~ "G",
+    str_starts(roi.Number, "22") ~ "H",
+    .default = "none"
+  )) %>%
+  mutate(roi.Depth = as.character(str_length(roi.Number)))
+
+section.palette = c("Grey",nest.palette)
+names(section.palette) = c("none", LETTERS[0:8])
+
+colony_turn_choices %>%
+  ggplot(aes(x=t0, y=Angle.Tally, color=roi.Section, linetype=roi.Depth)) +
+  geom_line(aes(group=roi.Number)) +
+  scale_color_manual(values=section.palette, drop=F) +
+  facet_grid(Colony ~ Branch.From, scales="free_y")
+```
