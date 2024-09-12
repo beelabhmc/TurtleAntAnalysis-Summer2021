@@ -16,7 +16,9 @@ require(glmmTMB)
 require(bbmle) #for AICtab
 
 # theme_set(theme_test(base_size=18)) # For poster
-theme_set(theme_test(base_size=10)) # For paper
+# theme_set(theme_test(base_size=10)) # For paper
+theme_set(theme_test(base_size=14)) # For talk
+
 
 nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
 nest.names <- c("A2","B3","C1","D2","E1","F1","G1","H1")
@@ -42,11 +44,12 @@ SP2 <- read.csv("data/SP2-Colony-90min-edges.csv")
 MW3 <- read.csv("data/MW3-Colony-90min-edges.csv") 
 SP3 <- read.csv("data/SP3-Colony-90min-edges.csv")
 
-colony_turns <- bind_rows(BA2 = BA2, SP2 = SP2, 
-                          MW3 = MW3, SP3 = SP3, .id="Colony") %>%
-  mutate(Colony.ID = factor(Colony, 
-                            levels= c("MW3","BA2","SP3","SP2"),
-                            labels = c("Col1","Col2","Col3","Col4")))
+colony_turns <- bind_rows("21-BA2" = BA2, "21-SP2" = SP2, 
+                          "21-MW3" = MW3, "21-SP3" = SP3, 
+                          .id="Colony") %>%
+  mutate(Colony = factor(Colony, 
+                            levels= c("21-MW3","21-BA2","21-SP3","21-SP2"),
+                            ))
 
 colony_turns <- colony_turns %>%
   mutate(Junction = as.numeric(str_sub(roi, 5, -1))) %>%
@@ -76,7 +79,7 @@ colony_nest_arrivals <- colony_turn_choices %>%
   left_join(tip_ref,
             by=c("Node.To" = "Tip")) %>%
   filter(Type=="nest") %>%
-  group_by(Colony.ID,Location) %>%
+  group_by(Colony,Location) %>%
   mutate(Tally=1) %>%
   mutate(Cumulative.Arrivals = cumsum(Type=="nest"))
 
@@ -96,15 +99,15 @@ colony_nest_departures <- colony_turn_choices %>%
   left_join(tip_ref,
             by=c("Node.From" = "Tip")) %>%
   filter(Type=="nest") %>%
-  group_by(Colony.ID,Location) %>%
+  group_by(Colony,Location) %>%
   mutate(Tally=-1) %>%
   mutate(Cumulative.Departures = -cumsum(Type=="nest"))
 
 colony_nest_tally <- bind_rows(colony_nest_arrivals, 
                                colony_nest_departures) %>%
-  group_by(Colony.ID) %>%
+  group_by(Colony) %>%
   arrange(t0, .by_group=TRUE) %>%
-  group_by(Colony.ID,Location) %>%
+  group_by(Colony,Location) %>%
   mutate(Cumulative.Tally = cumsum(Tally))
 
 colony_nest_tally %>% 
@@ -113,31 +116,54 @@ colony_nest_tally %>%
   scale_color_manual(values=nest.palette,drop=F) +
   xlab("Time after experiment start (min)") +
   ylab("Cumulative tally at nest") +
-  facet_wrap(. ~ Colony.ID, scales="free_y")
+  facet_wrap(. ~ Colony, scales="free_y")
 
 ```
-
-This doesn't look great. Hmmm.
+This doesn't look great, we should not have negative numbers here. Hmmm.
 
 ```{r}
-colony_nest_arrivals <- colony_turn_choices %>%
-  left_join(tip_ref,
+colony_tip_arrivals <- colony_turn_choices %>%
+  inner_join(tip_ref,
             by=c("Node.To" = "Tip")) %>%
-  filter(Type=="nest") %>%
-  group_by(Colony.ID,Location) %>%
+  group_by(Colony,Location) %>%
+  mutate(Type = case_when(Type=="empty" ~ "other",
+                          Type=="tag" ~ "other",
+                          .default = Type)) %>%
+  mutate(Type = factor(Type, 
+                       levels = c("nest", "trunk", 
+                                  "water", "sugar", 
+                                  "other"))) %>%
+  separate_wider_position(Location, widths=c(Section=1),
+                          too_many="drop", 
+                          cols_remove=FALSE) %>%
   mutate(Tally=1) %>%
-  mutate(Cumulative.Arrivals = cumsum(Type=="nest"))
+  mutate(Cumulative.Arrivals = cumsum(Tally))
 
-colony_nest_arrivals %>% 
-  ggplot(aes(x=t1,y=Cumulative.Arrivals,color=Location)) +
+#tip.palette <- rep("grey", nrow(tip_ref))
+#tip.palette <- rep(nest.palette, each=4)
+section.palette <- nest.palette
+names(section.palette) <- LETTERS[0:8]
+#tip.palette[names(nest.palette)] <- nest.palette
+tip.linetypes <- c(nest=1,water=2,sugar=3,other=4,trunk=6)
+tip.linewidths <- c(nest=1,water=0.5,sugar=0.5,other=0.5,trunk=1)
+
+
+colony_tip_arrivals %>% 
+  ggplot(aes(x=t1,y=Cumulative.Arrivals,color=Section,
+             linetype = Type, linewidth = Type)) +
   geom_line() +
-  scale_color_manual(values=nest.palette,drop=F) +
+  scale_color_manual(values=section.palette) +
+  scale_linetype_manual(values=tip.linetypes) +
+  scale_linewidth_manual(values=tip.linewidths) +
   xlab("Time after experiment start (min)") +
-  ylab("Cumulative arrivals at nest") +
-  facet_wrap(. ~ Colony, scales="free_y")
+  ylab("Cumulative arrivals at branch tips") +
+  facet_grid(Colony~., scales="free_y")
+
+ggsave("images/ColonyChoice-Tracking90min-TALK.eps", 
+       width = 6.5, height = 7, units = "in")
 ```
 
-Let's try to plot what's happening at the different junctions.
+Let's try to plot what's happening at all the different junctions.
 
 ```{r}
 colony_turn_choices <- colony_turn_choices %>% 
@@ -183,4 +209,11 @@ colony_turn_choices %>%
   geom_line(aes(group=roi.Number)) +
   scale_color_manual(values=section.palette, drop=F) +
   facet_grid(Colony ~ Branch.From, scales="free_y")
+```
+```{r}
+colony_turn_choices %>%
+  filter(Colony == "21-SP2") %>%
+  ggplot(aes(x=t0, y=Angle.Tally, color=Branch.From)) +
+  geom_line() +
+  facet_wrap(vars(roi.Number))
 ```

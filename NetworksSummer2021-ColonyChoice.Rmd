@@ -13,7 +13,8 @@ require(tidyverse)
 require(lubridate)
 require(glmmTMB)
 require(sjPlot)
-theme_set(theme_test(base_size=10))
+#theme_set(theme_test(base_size=10)) # for paper
+theme_set(theme_test(base_size=14)) # for talk
 
 nest.palette <- palette.colors(n = 9, palette = "Classic Tableau")[c(1:7,9)]
 names(nest.palette) = c("A2","B3","C1","D2","E1","F1","G1","H1")
@@ -66,9 +67,9 @@ census %>% group_by(Colony.Name) %>%
   summarize(totalAnts=sum(Workers,Soldiers, Queen, Winged.Queens, Males))
 
 census <- census %>%
-  mutate(Colony.ID = factor(Colony.Name, 
-                            levels= c("21-MW3","21-BA2","21-SP3","21-SP2"),
-                            labels = c("Col1","Col2","Col3","Col4")))
+  mutate(Colony.Name = factor(Colony.Name, 
+                            levels= c("21-MW3","21-BA2","21-SP3","21-SP2")
+                            ))
 ```
 We want to join this with information about each nest.
 
@@ -92,15 +93,17 @@ census %>%
   geom_col() +
   scale_fill_manual(values=nest.palette,drop=F) +
 #  scale_y_log10() +
-  facet_grid(Colony.ID~.) + 
+  facet_grid(Colony.Name ~ .) + 
   xlab("Nest Location") + ylab("Number of workers") +
   labs(fill="Nest Location")  +
 #  labs(title = "Nest Choice (Colony Experiment)") +
   theme(legend.position="none",plot.title = element_text(hjust = 0.5))
 #ggsave("images/ColonyChoice-NumWorkers-POSTER.png", 
 #       dpi=300, width = 8, height = 5, units = "in")
-ggsave("images/ColonyChoice-NumWorkers-PAPER.eps", 
-       width = 3, height = 2.5, units = "in")
+#ggsave("images/ColonyChoice-NumWorkers-PAPER.eps", 
+ #      width = 3, height = 2.5, units = "in")
+ggsave("images/ColonyChoice-NumWorkers-TALK.eps", 
+       width = 6.5, height = 7, units = "in")
 
 ```
 Next, let's load in the daily checks of each nest during the experiment. This contains a qualitative assessment of the number of ants in each nest periodically during each colony choice experiment.
@@ -117,9 +120,9 @@ daily <- daily %>%
   mutate(Experiment.Time=days(Experiment.Day)+hm(Time)) %>%
   dplyr::select(-Time) %>%
   rename_with(~gsub('\\.\\..*','',.x)) %>%
-  mutate(Colony.ID = factor(Colony, 
+  mutate(Colony.Name = factor(Colony, 
                             levels= c("21-MW3","21-BA2","21-SP3","21-SP2"),
-                            labels = c("Col1","Col2","Col3","Col4"))) %>%
+                            )) %>%
   rename(Nest.Label=Nest) %>%
   mutate(Nest.Label=if_else(Nest.Label=="2111","2112",Nest.Label)) %>% # mislabeling of nest
   mutate(Number.of.ants=factor(tolower(Number.of.ants), 
@@ -140,6 +143,9 @@ daily <- daily %>% left_join(tips,by=c("Nest.Label"="Tip")) %>%
 ```
 
 ```{r}
+checktimes <- c(0,0,1,1,2,2,3,3) + c((12+5)/24,(12+9)/24)
+checktimelabels <- rep(c("5pm","9pm"), times=4)
+
 daily %>% 
   filter(Number.of.ants != "none") %>%
   ggplot(aes(x=as.numeric(Experiment.Time,"days"),
@@ -149,16 +155,22 @@ daily %>%
   scale_color_manual(values=nest.palette,drop=F) +
   scale_linewidth_manual(name="Nest occupation", 
                          values=c(0.3,1.5), labels=c("few ants", "many ants")) +
-  facet_grid(Colony.ID~.) +
-  theme(axis.text.y = element_blank(), axis.ticks= element_blank()) +
+  scale_x_continuous(breaks = c(1,2,3,4), minor_breaks = checktimes) + 
+  facet_grid(Colony.Name ~ .) +
+  theme(axis.text.y = element_blank(), axis.ticks.y= element_blank(),
+        panel.grid.minor.x = element_line(color = "grey",
+                                        linewidth = 0.25,
+                                        linetype = 1)) +
   xlab("Day of Experiment") +
   ylab("Nest Location") +
   # labs(title = "Nest Occupation (Colony Experiment)") +
   guides(color="none")
 #ggsave("images/ColonyChoice-DailyCheck-POSTER.png", 
 #       dpi=300, width = 8, height = 5, units = "in")
-ggsave("images/ColonyChoice-DailyCheck-PAPER.eps", 
-       width = 6.5, height = 2, units = "in")
+#ggsave("images/ColonyChoice-DailyCheck-PAPER.eps", 
+#       width = 6.5, height = 2, units = "in")
+ggsave("images/ColonyChoice-DailyCheck-TALK.eps", 
+       width = 6.5, height = 7, units = "in")
 ```
 
 ## Do colonies show a preference for specific nests?
